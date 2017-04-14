@@ -40,6 +40,11 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
     public bool m_enableDebugUI = true;
 
     /// <summary>
+    /// If set, grid indices will stop meshing when they have been sufficiently observed.
+    /// </summary>
+    public bool m_enableSelectiveMeshing = false;
+
+    /// <summary>
     /// How much the dynamic mesh should grow its internal arrays.
     /// </summary>
     private const float GROWTH_FACTOR = 1.5f;
@@ -63,6 +68,27 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
     /// How much the texture coordinates change relative to the actual distance.
     /// </summary>
     private const float UV_PER_METERS = 10;
+
+    /// <summary>
+    /// Used for selective meshing, number of sufficient observations necessary to consider a grid index as complete.
+    /// </summary>
+    private const int NUM_OBSERVATIONS_TO_COMPLETE = 25;
+
+    /// <summary>
+    /// Used for selective meshing, byte representation of the completed observation directions.
+    /// 
+    /// The mesh needs to be observed every 90 degrees around the mesh to be completed for a total of 4 directions.
+    /// The first 4 bits must be on, i.e. 00001111.
+    /// </summary>
+    private const byte DIRECTIONS_COMPLETE = 15;
+
+    /// <summary>
+    /// Used for selective meshing, the minimum value of the dot product between the camera forward direction and a
+    /// grid index's direction check. 
+    /// 
+    /// If the calculated dot product meets this value, the grid index is considered to have been viewed from the given direction.
+    /// </summary>
+    private readonly float m_minDirectionCheck = Mathf.Cos(Mathf.PI / 4);
 
     /// <summary>
     /// The TangoApplication for the scene.
@@ -115,6 +141,17 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
     private int m_debugRemeshingCount;
 
     /// <summary>
+    /// The list of grid index configuration sets (each represented as a list of grid indices) to
+    /// be checked for observation count during selective meshing.
+    /// </summary>
+    private Vector3[][] m_gridIndexConfigs;
+
+    /// <summary>
+    /// The bounding box of the mesh.
+    /// </summary>
+    private Bounds m_bounds;
+
+    /// <summary>
     /// Gets the number of queued mesh updates still waiting for processing.
     /// 
     /// May be slightly overestimated if there have been too many updates to process and some
@@ -155,6 +192,11 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
         if (m_meshCollider != null)
         {
             m_meshCollider.enabled = false;
+        }
+
+        if (m_enableSelectiveMeshing)
+        {
+            _InitGridIndexConfigs();
         }
     }
 
@@ -276,35 +318,31 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
         {
             Destroy(child.gameObject);
         }
-        
+
         m_meshes.Clear();
     }
 
     /// <summary>
-    /// Exports the constructed mesh to a Wavefront OBJ file format. The file will include info
+    /// Exports the constructed mesh to an OBJ file format. The file will include info
     /// based on the enabled options in TangoApplication.
     /// </summary>
-    /// <param name="filepath">Filepath to output the OBJ.</param>
+    /// <param name="filepath">File path to output the OBJ.</param>
     public void ExportMeshToObj(string filepath)
     {
         AndroidHelper.ShowAndroidToastMessage("Exporting mesh...");
-
         StringBuilder sb = new StringBuilder();
-
         int startVertex = 0;
 
         foreach (TangoSingleDynamicMesh tmesh in m_meshes.Values)
         {
             Mesh mesh = tmesh.m_mesh;
             int meshVertices = 0;
-
             sb.Append(string.Format("g {0}\n", tmesh.name));
 
             // Vertices.
             for (int i = 0; i < mesh.vertices.Length; i++)
             {
                 meshVertices++;
-
                 Vector3 v = tmesh.transform.TransformPoint(mesh.vertices[i]);
 
                 // Include vertex colors as part of vertex point for applications that support it.
@@ -349,19 +387,118 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
             int[] triangles = mesh.triangles;
             for (int j = 0; j < triangles.Length; j += 3)
             {
-                sb.Append(string.Format("f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\n", triangles[j + 2] + 1 + startVertex, triangles[j + 1] + 1 + startVertex, triangles[j] + 1 + startVertex));
+                int v1 = triangles[j + 2] + 1 + startVertex;
+                int v2 = triangles[j + 1] + 1 + startVertex;
+                int v3 = triangles[j] + 1 + startVertex;
+
+                // Filter out single vertex index triangles which cause Maya to not be able to
+                // import the mesh.
+                if (v1 != v2 || v2 != v3)
+                {
+                    sb.Append(string.Format("f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\n", v1, v2, v3));
+                }
             }
 
             sb.Append("\n");
-
             startVertex += meshVertices;
         }
 
         StreamWriter sw = new StreamWriter(filepath);
         sw.AutoFlush = true;
         sw.Write(sb.ToString());
-
         AndroidHelper.ShowAndroidToastMessage(string.Format("Exported: {0}", filepath));
+    }
+
+    /// <summary>
+    /// Gets each single dynamic mesh and fills out arrays with properties. Each mesh corresponds to the same index in each array.
+    /// </summary>
+    /// <param name="gridIndices">Filled out with grid index of each mesh.</param>
+    /// <param name="completed">Filled out with completion state of each mesh.</param>
+    /// <param name="completionScale">Filled out with amount that each mesh has been completed.</param>
+    /// <param name="directions">Filled out with a byte representation of the observed directions of each mesh.</param>
+    public void GetSingleMeshProperties(out Tango3DReconstruction.GridIndex[] gridIndices, out bool[] completed, out float[] completionScale, out byte[] directions)
+    {
+        int numIndices = m_meshes.Count;
+        gridIndices = new Tango3DReconstruction.GridIndex[numIndices];
+        completed = new bool[numIndices];
+        completionScale = new float[numIndices];
+        directions = new byte[numIndices];
+
+        // Assign mesh properties to each index of the arrays.
+        m_meshes.Keys.CopyTo(gridIndices, 0);
+        for (int i = 0; i < numIndices; i++)
+        {
+            TangoSingleDynamicMesh mesh = m_meshes[gridIndices[i]];
+            completed[i] = mesh.m_completed;
+            completionScale[i] = 1.0f * mesh.m_observations / NUM_OBSERVATIONS_TO_COMPLETE;
+            directions[i] = mesh.m_directions;
+        }
+    }
+
+    /// <summary>
+    /// Gets the highest point on the dynamic mesh through at a given position.
+    /// 
+    /// Raycast against a subset of TangoSingleDynamicMesh colliders and find the highest point. The subset
+    /// is defined by all the meshes intersected by a downward-pointing ray that passes through a position.
+    /// </summary>
+    /// <returns>The highest raycast hit point.</returns>
+    /// <param name="position">The position to cast a ray through.</param>
+    /// <param name="maxDistance">The max distance of the ray.</param>
+    public Vector3 GetHighestRaycastHitPoint(Vector3 position, float maxDistance)
+    {
+        if (GetComponent<Collider>() == null)
+        {
+            return position;
+        }
+
+        Vector3 topHitPoint = position;
+        Ray ray = new Ray(position + (Vector3.up * (maxDistance / 2)), Vector3.down);
+
+        // Find the starting grid index X and Y components.
+        float gridIndexSize = m_tangoApplication.m_3drResolutionMeters * 16;
+        int gridIndexX = Mathf.FloorToInt(position.x / gridIndexSize);
+        int gridIndexY = Mathf.FloorToInt(position.z / gridIndexSize);
+
+        // Find the top and bottom grid indices that are overlapped by a raycast downward through the position.
+        int topZ = Mathf.FloorToInt(ray.origin.y / gridIndexSize);
+        int btmZ = Mathf.FloorToInt((ray.origin.y - maxDistance) / gridIndexSize);
+
+        // Perform a raycast on each TangoSingleDynamicMesh collider the ray passes through.
+        for (int i = btmZ; i <= topZ; i++)
+        {
+            Tango3DReconstruction.GridIndex newGridIndex = new Tango3DReconstruction.GridIndex();
+            newGridIndex.x = gridIndexX;
+            newGridIndex.y = gridIndexY;
+            newGridIndex.z = i;
+
+            // Find the mesh associated with the grid index if available. Raycast to the attached collider.
+            TangoSingleDynamicMesh singleDynamicMesh;
+            if (m_meshes.TryGetValue(newGridIndex, out singleDynamicMesh))
+            {
+                Collider c = singleDynamicMesh.GetComponent<Collider>();
+                RaycastHit hit;
+                if (c.Raycast(ray, out hit, maxDistance))
+                {
+                    // Update the highest position if the new raycast hit is above. Reject the hit if the normal is orthogonal to the up 
+                    // direction (to prevent the object from unintentionally climbing up walls).
+                    if ((hit.point.y > topHitPoint.y) && (Vector3.Dot(hit.normal, Vector3.up) > 0.1f))
+                    {
+                        topHitPoint = hit.point;
+                    }
+                }
+            }
+        }
+
+        return topHitPoint;
+    }
+
+    /// <summary>
+    /// Gets the bounds of the mesh.
+    /// </summary>
+    /// <returns>The bounds.</returns>
+    public Bounds GetBounds()
+    {
+        return m_bounds;
     }
 
     /// <summary>
@@ -379,7 +516,7 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
     /// Extract and update (or create, if it doesn't exist) the mesh at the given grid index.
     /// </summary>
     /// <param name="gridIndex">Grid index.</param>
-    /// <param name="needsResize">List to which indicies needing a future resize will be added.</param>
+    /// <param name="needsResize">List to which indices needing a future resize will be added.</param>
     private void _UpdateMeshAtGridIndex(Tango3DReconstruction.GridIndex gridIndex, List<Tango3DReconstruction.GridIndex> needsResize)
     {
         TangoSingleDynamicMesh dynamicMesh;
@@ -442,6 +579,18 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
             }
             
             m_meshes.Add(gridIndex, dynamicMesh);
+            _UpdateBounds(gridIndex);
+        }
+
+        // Skip updating this grid index if it is considered completed.
+        if (m_enableSelectiveMeshing) 
+        {
+            if (dynamicMesh.m_completed)
+            {
+                return;
+            }
+
+            _ObserveGridIndex(gridIndex, dynamicMesh);
         }
         
         // Last frame the mesh needed more space.  Give it more room now.
@@ -508,7 +657,7 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
                 dynamicMesh.m_uv[vertexIt].y = (vertex.z + vertex.y) * UV_PER_METERS;
             }
         }
-        
+
         dynamicMesh.m_mesh.Clear();
         dynamicMesh.m_mesh.vertices = dynamicMesh.m_vertices;
         dynamicMesh.m_mesh.uv = dynamicMesh.m_uv;
@@ -527,6 +676,280 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
         }
     }
 
+    /// <summary>
+    /// When the grid index has been updated, also determine whether it should be considered completed
+    /// based on its neighboring grid indices, number of observations, and mesh completeness.
+    /// 
+    /// When checking a grid index for completeness, the observation count of neighboring grid indices is checked.
+    /// If all grid indices contained in one of the configurations have a sufficient number of observations,
+    /// the grid index is considered complete.
+    /// </summary>
+    /// <param name="gridIndex">Grid index to observe.</param>
+    /// <param name="singleMesh">TangoSingleDynamicMesh to update and observe.</param>
+    private void _ObserveGridIndex(Tango3DReconstruction.GridIndex gridIndex, TangoSingleDynamicMesh singleMesh)
+    {
+        // Increment the observations made for this grid index.
+        singleMesh.m_observations++;
+
+        // Add observation based on the direction of the observation.
+        _ViewGridIndex(gridIndex);
+
+        // Exit if the grid index has not been observed from all 8 directions.
+        if (singleMesh.m_directions != DIRECTIONS_COMPLETE)
+        {
+            return;
+        }
+
+        // Run through each grid index configuration and check if the grid index is complete.
+        for (int i = 0; i < m_gridIndexConfigs.Length; i++)
+        {
+            Vector3[] config = m_gridIndexConfigs[i];
+            bool neighborsObserved = true;
+            foreach (Vector3 nPosition in config)
+            {
+                Tango3DReconstruction.GridIndex neighbor = new Tango3DReconstruction.GridIndex();
+                neighbor.x = (Int32)(nPosition.x + gridIndex.x);
+                neighbor.y = (Int32)(nPosition.y + gridIndex.y);
+                neighbor.z = (Int32)(nPosition.z + gridIndex.z);
+                TangoSingleDynamicMesh nSingleMesh;
+                if (m_meshes.TryGetValue(neighbor, out nSingleMesh))
+                {
+                    if (nSingleMesh.m_observations < NUM_OBSERVATIONS_TO_COMPLETE)
+                    {
+                        neighborsObserved = false;
+                        break;
+                    }
+                }
+            }
+
+            // Complete using this configurations of the neighbors with sufficient observations.
+            if (neighborsObserved)
+            {
+                // Add the grid index to the completed list, so it will be skipped during next mesh update.
+                singleMesh.m_completed = true;
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Initialize the sets of grid index neighbor configurations to check when performing selective meshing.
+    /// </summary>
+    private void _InitGridIndexConfigs()
+    {
+        // Grid indices use the Right Hand Local Level coordinate system. The diagrams below show which grid
+        // indices are checked in each configuration for sufficient observations. The following layouts show 
+        // each config represented as 3x3 Vector3 matrices, separated into z-planes.
+        // (-1,1,0)  (0,1,0)  (1,1,0)
+        // (-1,0,0)  (0,0,0)  (1,0,0)
+        // (-1,-1,0) (0,-1,0) (1,-1,0)
+        // 'x' is a grid index that is checked, '-' is not checked.
+
+        // Wall-Corner-Floor configuration.
+        // z = 0    z = 1
+        // - x x    - x -
+        // x x x    x x -
+        // x x x    - - -
+        Vector3[] wallCornerFloor = new Vector3[]
+        {
+            new Vector3(0, 1, 0),
+            new Vector3(1, 1, 0),
+            new Vector3(-1, 0, 0),
+            new Vector3(0, 0, 0),
+            new Vector3(1, 0, 0),
+            new Vector3(-1, -1, 0),
+            new Vector3(0, -1, 0),
+            new Vector3(1, -1, 0),
+            new Vector3(0, 1, 1),
+            new Vector3(-1, 0, 1),
+            new Vector3(0, 0, 1),
+        };
+
+        // Wall-Floor configuration.
+        // z = 0    z = 1
+        // - - -    - - -
+        // x x x    x x x
+        // x x x    - - -
+        Vector3[] wallFloor = new Vector3[]
+        {
+            new Vector3(-1, 0, 0),
+            new Vector3(0, 0, 0),
+            new Vector3(1, 0, 0),
+            new Vector3(-1, -1, 0),
+            new Vector3(0, -1, 0),
+            new Vector3(1, -1, 0),
+            new Vector3(-1, 0, 1),
+            new Vector3(0, 0, 1),
+            new Vector3(1, 0, 1),
+        };
+
+        // Wall-Corner configuration.
+        // z = -1  z = 0   z = 1
+        // - x -   - x -   - x -
+        // x x -   x x -   x x -
+        // - - -   - - -   - - -
+        Vector3[] wallCorner = new Vector3[]
+        {
+            new Vector3(0, 1, -1),
+            new Vector3(-1, 0, -1),
+            new Vector3(0, 0, -1),
+            new Vector3(0, 1, 0),
+            new Vector3(-1, 0, 0),
+            new Vector3(0, 0, 0),
+            new Vector3(0, 1, 1),
+            new Vector3(-1, 0, 1),
+            new Vector3(0, 0, 1),
+        };
+
+        // Wall configuration.
+        // z = -1  z = 0   z = 1
+        // - - -   - - -   - - -
+        // x x x   x x x   x x x
+        // - - -   - - -   - - -
+        Vector3[] wall = new Vector3[]
+        {
+            new Vector3(-1, 0, 0),
+            new Vector3(0, 0, 0),
+            new Vector3(1, 0, 0),
+            new Vector3(-1, 0, 1),
+            new Vector3(0, 0, 1),
+            new Vector3(1, 0, 1),
+            new Vector3(-1, 0, -1),
+            new Vector3(0, 0, -1),
+            new Vector3(1, 0, -1),
+        };
+
+        // Floor configuration.
+        // z = 0
+        // x x x
+        // x x x
+        // x x x
+        Vector3[] floor = new Vector3[]
+        {
+            new Vector3(-1, 1, 0),
+            new Vector3(0, 1, 0),
+            new Vector3(1, 1, 0),
+            new Vector3(-1, 0, 0),
+            new Vector3(0, 0, 0),
+            new Vector3(1, 0, 0),
+            new Vector3(-1, -1, 0),
+            new Vector3(0, -1, 0),
+            new Vector3(1, -1, 0),
+        };
+
+        // Rotate each configuration for different orientations and add to the list of configs to check for completeness.
+        m_gridIndexConfigs = new Vector3[15][];
+        m_gridIndexConfigs[0] = wallCornerFloor;
+        m_gridIndexConfigs[1] = _GetRotatedGridIndexConfig(wallCornerFloor, 90);
+        m_gridIndexConfigs[2] = _GetRotatedGridIndexConfig(wallCornerFloor, 180);
+        m_gridIndexConfigs[3] = _GetRotatedGridIndexConfig(wallCornerFloor, 270);
+        m_gridIndexConfigs[4] = wallFloor;
+        m_gridIndexConfigs[5] = _GetRotatedGridIndexConfig(wallFloor, 90);
+        m_gridIndexConfigs[6] = _GetRotatedGridIndexConfig(wallFloor, 180);
+        m_gridIndexConfigs[7] = _GetRotatedGridIndexConfig(wallFloor, 270);
+        m_gridIndexConfigs[8] = wallCorner;
+        m_gridIndexConfigs[9] = _GetRotatedGridIndexConfig(wallCorner, 90);
+        m_gridIndexConfigs[10] = _GetRotatedGridIndexConfig(wallCorner, 180);
+        m_gridIndexConfigs[11] = _GetRotatedGridIndexConfig(wallCorner, 270);
+        m_gridIndexConfigs[12] = wall;
+        m_gridIndexConfigs[13] = _GetRotatedGridIndexConfig(wall, 90);
+        m_gridIndexConfigs[14] = floor;
+    }
+
+    /// <summary>
+    /// Helper function to get a copy of the grid index config after it has been rotated around the z-axis.
+    /// </summary>
+    /// <returns>The rotated grid index config.</returns>
+    /// <param name="config">List of grid indices in the config.</param>
+    /// <param name="zRotation">Amount of rotation to apply around the z-axis.</param>
+    private Vector3[] _GetRotatedGridIndexConfig(Vector3[] config, float zRotation)
+    {
+        Vector3[] finalConfig = new Vector3[config.Length];
+        for (int j = 0; j < config.Length; j++)
+        {
+            finalConfig[j] = Quaternion.Euler(0, 0, zRotation) * config[j];
+        }
+
+        return finalConfig;
+    }
+
+    /// <summary>
+    /// Set the grid index as having been observed from the given direction.
+    /// </summary>
+    /// <param name="gridIndex">Grid index to observe.</param>
+    private void _ViewGridIndex(Tango3DReconstruction.GridIndex gridIndex)
+    {
+        // This update may occur somewhat later than the actual time of the camera pose observation.
+        Vector3 dir = Camera.main.transform.forward;
+        dir = new Vector3(dir.x, 0.0f, dir.z).normalized;
+        Vector3[] directions = new Vector3[]
+        {
+            new Vector3(0, 0, 1),
+            new Vector3(0, 0, -1),
+            new Vector3(1, 0, 0),
+            new Vector3(-1, 0, 0)
+        };
+        
+        for (int i = 0; i < 4; i++)
+        {
+            // If the camera is facing one of 4 directions (every 90 degrees) within a 45 degree spread,
+            // set that direction as seen.
+            float dot = Vector3.Dot(dir, directions[i]);
+            if (dot > m_minDirectionCheck)
+            {
+                // Bitwise OR new and old directions to show that the mesh has been observed from the new direction.
+                byte direction = (byte)(1 << i);
+                m_meshes[gridIndex].m_directions = (byte)(m_meshes[gridIndex].m_directions | direction);
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Update the bounding box.
+    /// </summary>
+    /// <param name="gridIndex">Grid index to include in bounds.</param>
+    private void _UpdateBounds(Tango3DReconstruction.GridIndex gridIndex)
+    {
+        float gridIndexSize = m_tangoApplication.m_3drResolutionMeters * 16;
+        Vector3 pointToCompare = gridIndexSize * new Vector3(gridIndex.x, gridIndex.y, gridIndex.z);
+
+        Vector3 min = m_bounds.min;
+        Vector3 max = m_bounds.max;
+
+        if (m_bounds.min.x > pointToCompare.x)
+        {
+            min.x = pointToCompare.x;
+        }
+
+        if (m_bounds.min.y > pointToCompare.y)
+        {
+            min.y = pointToCompare.y;
+        }
+
+        if (m_bounds.min.z > pointToCompare.z)
+        {
+            min.z = pointToCompare.z;
+        }
+
+        if (m_bounds.max.x < pointToCompare.x)
+        {
+            max.x = pointToCompare.x;
+        }
+
+        if (m_bounds.max.y < pointToCompare.y)
+        {
+            max.y = pointToCompare.y;
+        }
+
+        if (m_bounds.max.z < pointToCompare.z)
+        {
+            max.z = pointToCompare.z;
+        }
+
+        m_bounds.SetMinMax(min, max);
+    }
+    
     /// <summary>
     /// Component for a dynamic, resizable mesh.
     /// 
@@ -551,27 +974,45 @@ public class TangoDynamicMesh : MonoBehaviour, ITango3DReconstruction
         public bool m_needsToGrow;
 
         /// <summary>
-        /// Cache for Mesh.vertices.
+        /// Cache for <c>Mesh.vertices</c>.
         /// </summary>
         [HideInInspector]
         public Vector3[] m_vertices;
 
         /// <summary>
-        /// Cache for Mesh.uv.
+        /// Cache for <c>Mesh.uv</c>.
         /// </summary>
         [HideInInspector]
         public Vector2[] m_uv;
 
         /// <summary>
-        /// Cache for Mesh.colors.
+        /// Cache for <c>Mesh.colors</c>.
         /// </summary>
         [HideInInspector]
         public Color32[] m_colors;
 
         /// <summary>
-        /// Cache to Mesh.triangles.
+        /// Cache to <c>Mesh.triangles</c>.
         /// </summary>
         [HideInInspector]
         public int[] m_triangles;
+
+        /// <summary>
+        /// Set as <c>true</c> if the grid index is considered complete.
+        /// </summary>
+        [NonSerialized]
+        public bool m_completed;
+        
+        /// <summary>
+        /// The number of times the grid index has been observed.
+        /// </summary>
+        [NonSerialized]
+        public int m_observations = 1;
+        
+        /// <summary>
+        /// The directions from which that the grid index has been observed.
+        /// </summary>
+        [NonSerialized]
+        public byte m_directions;
     }
 }

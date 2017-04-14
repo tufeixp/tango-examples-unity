@@ -1,4 +1,4 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="TangoPrefabInspectorHelper.cs" company="Google">
 //
 // Copyright 2016 Google Inc. All Rights Reserved.
@@ -41,7 +41,7 @@ namespace Tango
         /// </summary>
         /// <returns><c>true</c>, if a tango application on an active GameObject can be identified, 
         /// <c>false</c> otherwise.</returns>
-        /// <param name="inspectedBehaviour">Prefab behaviour that's being inspected.</param>
+        /// <param name="inspectedBehaviour">Prefab behavior that's being inspected.</param>
         /// <param name="tangoApplication">Prefab inspector's reference to Tango Application, or
         /// null if no Tango Application on an active GameObject can be identified.</param>
         public static bool CheckForTangoApplication(MonoBehaviour inspectedBehaviour,
@@ -103,7 +103,7 @@ namespace Tango
                                                            bool shouldUsePermissions)
         {
             bool hasPermissions = tangoApplication.m_enableAreaDescriptions;
-            
+
             if (!hasPermissions && shouldUsePermissions)
             {
                 EditorGUILayout.HelpBox("\"Use Area Description Pose\" option selected but active "
@@ -122,7 +122,7 @@ namespace Tango
             
             return hasPermissions == tangoApplication.m_enableAreaDescriptions;
         }
-        
+
         /// <summary>
         /// Checks whether depth permissions are selected and draws a warning if they are not.
         /// </summary>
@@ -153,7 +153,7 @@ namespace Tango
         {
             bool hasNeededVideoPermissions = tangoApplication.m_enableVideoOverlay;
             
-            if (textureIdMethodRequired && !tangoApplication.m_videoOverlayUseTextureIdMethod)
+            if (textureIdMethodRequired && !tangoApplication.m_videoOverlayUseTextureMethod)
             {
                 hasNeededVideoPermissions = false;
             }

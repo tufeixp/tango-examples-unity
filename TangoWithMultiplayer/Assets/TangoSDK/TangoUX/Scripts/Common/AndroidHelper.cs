@@ -21,14 +21,19 @@ using System.Collections;
 using UnityEngine;
 
 /// <summary>
-/// Misc Android related utilities provided by the Tango UX SDK.
+/// Miscellaneous Android related utilities provided by the Tango UX SDK.
 /// </summary>
 public partial class AndroidHelper
 {
     #pragma warning disable 414
     private static AndroidJavaObject m_tangoUxHelper = null;
     #pragma warning restore 414
-
+    private static System.IntPtr m_tangoUxHelper_class;
+    private static System.IntPtr m_tangoUxHelper_obj;
+    private static System.IntPtr m_tangoUxHelper_processPoseDataStatus;
+    [System.ThreadStatic] private static jvalue[] val;
+    [System.ThreadStatic] private static int jniAttached; 
+    
     /// <summary>
     /// Gets the Java tango helper object.
     /// </summary>
@@ -39,6 +44,8 @@ public partial class AndroidHelper
         if(m_tangoUxHelper == null)
         {
             m_tangoUxHelper = new AndroidJavaObject("com.projecttango.unityuxhelper.TangoUnityUxHelper", GetUnityActivity());
+            m_tangoUxHelper_class = m_tangoUxHelper.GetRawClass();
+            m_tangoUxHelper_obj = m_tangoUxHelper.GetRawObject();
         }
         return m_tangoUxHelper;
         #else
@@ -71,7 +78,27 @@ public partial class AndroidHelper
         AndroidJavaObject tangoUxObject = GetTangoUxHelperObject();
         if (tangoUxObject != null)
         {
-            tangoUxObject.Call("processPoseDataStatus", poseStatus);
+            // Replaced with the call to JNI to reduce memory allocations
+            // tangoUxObject.Call("processPoseDataStatus", poseStatus);
+            if (jniAttached != 1)
+            {
+               if (AndroidJNI.AttachCurrentThread() == 0)
+               {
+                 jniAttached = 1;
+               }
+            }
+            
+            if (jniAttached == 1)
+            {
+                if (val == null)
+                {
+                    val = new jvalue[1];
+                }      
+                
+                m_tangoUxHelper_processPoseDataStatus = AndroidJNI.GetMethodID(m_tangoUxHelper_class, "processPoseDataStatus", "(I)V");
+                val[0].i = poseStatus;
+                AndroidJNI.CallVoidMethod(m_tangoUxHelper_obj, m_tangoUxHelper_processPoseDataStatus, val);
+            }
         }
     }
 
@@ -89,7 +116,7 @@ public partial class AndroidHelper
     }
 
     /// <summary>
-    /// Initialize tango ux library.
+    /// Initialize Tango UX library.
     /// </summary>
     public static void InitTangoUx()
     {
@@ -101,15 +128,30 @@ public partial class AndroidHelper
     }
 
     /// <summary>
-    /// Shows the standard tango exceptions UI.
+    /// Shows the standard Tango exception UI.
     /// </summary>
-    /// <param name="shouldUseDefaultUi">A flag to indicate if default TangoUx UI is enabled.</param>
+    /// <param name="shouldUseDefaultUi">A flag to indicate if default <c>TangoUx</c> UI is enabled.</param>
     public static void ShowStandardTangoExceptionsUI(bool shouldUseDefaultUi)
     {
         AndroidJavaObject tangoUxObject = GetTangoUxHelperObject();
         if (tangoUxObject != null)
         {
             tangoUxObject.Call("showDefaultExceptionsUi", shouldUseDefaultUi);
+        }
+    }
+
+    /// <summary>
+    /// Start exception handler.
+    /// 
+    /// This is interface is to handle the case of displaying notification when Tango is not connect, i.e.
+    /// Tango Core out of date.
+    /// </summary>
+    public static void StartExceptionHandler()
+    {
+        AndroidJavaObject tangoUxObject = GetTangoUxHelperObject();
+        if (tangoUxObject != null)
+        {
+            tangoUxObject.Call("startExceptionHandler");
         }
     }
 
@@ -142,7 +184,7 @@ public partial class AndroidHelper
     }
 
     /// <summary>
-    /// Sets the Tango Ux exception event listener.
+    /// Sets the Tango UX exception event listener.
     /// </summary>
     public static void SetUxExceptionEventListener()
     {
@@ -163,6 +205,18 @@ public partial class AndroidHelper
         if (tangoUxObject != null)
         {
             tangoUxObject.Call("setHoldPosture", holdPostureType);
+        }
+    }
+
+    /// <summary>
+    /// Display notification for Tango Core out of date.
+    /// </summary>
+    public static void ShowTangoOutOfDate()
+    {
+        AndroidJavaObject tangoUxObject = GetTangoUxHelperObject();
+        if (tangoUxObject != null)
+        {
+            tangoUxObject.Call("showTangoOutOfDate");
         }
     }
 }

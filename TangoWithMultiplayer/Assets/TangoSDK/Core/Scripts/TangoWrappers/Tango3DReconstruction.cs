@@ -1,4 +1,4 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="Tango3DReconstruction.cs" company="Google">
 //
 // Copyright 2016 Google Inc. All Rights Reserved.
@@ -37,7 +37,8 @@ namespace Tango
     /// Manages a single instance of the Tango 3D Reconstruction library, updating a single 3D model based on depth
     /// and color information.
     /// </summary>
-    public class Tango3DReconstruction : IDisposable, ITangoLifecycle, ITangoDepthMultithreaded, ITangoVideoOverlayMultithreaded
+    public class Tango3DReconstruction
+        : IDisposable, ITangoLifecycle, ITangoPointCloudMultithreaded, ITangoVideoOverlayMultithreaded
     {
         /// <summary>
         /// If set 3D Reconstruction will happen in the area description's reference frame.
@@ -80,24 +81,19 @@ namespace Tango
         private Matrix4x4 m_device_T_colorCamera;
 
         /// <summary>
-        /// Constant calibration data for the color camera.
-        /// </summary>
-        private APICameraCalibration m_colorCameraIntrinsics;
-
-        /// <summary>
         /// Cache of the most recent depth received, to send with color information.
         /// </summary>
         private APIPointCloud m_mostRecentDepth;
 
         /// <summary>
-        /// Cache of the most recent depth received's points.
+        /// Cache of the most recent depth's points.
         /// 
         /// This is a separate array so the code can use Marshal.Copy.
         /// </summary>
-        private float[] m_mostRecentDepthPoints = new float[TangoUnityDepth.MAX_POINTS_ARRAY_SIZE];
+        private float[] m_mostRecentDepthPoints = new float[Common.MAX_NUM_POINTS * 4];
 
         /// <summary>
-        /// Cache of the most recent depth received's pose, to send with color information.
+        /// Cache of the most recent depth's pose, to send with color information.
         /// </summary>
         private APIPose m_mostRecentDepthPose;
 
@@ -118,12 +114,19 @@ namespace Tango
         /// <param name="resolution">Size in meters of each grid cell.</param>
         /// <param name="generateColor">If true the reconstruction will contain color information.</param>
         /// <param name="spaceClearing">If true the reconstruction will clear empty space it detects.</param> 
-        internal Tango3DReconstruction(float resolution, bool generateColor, bool spaceClearing)
+        /// <param name="minNumVertices">
+        /// If non-zero, any submesh with less than this number of vertices will get removed, assumed to be noise.
+        /// </param>
+        /// <param name="updateMethod">Method used to update voxels.</param>
+        internal Tango3DReconstruction(float resolution, bool generateColor, bool spaceClearing, int minNumVertices,
+                                       UpdateMethod updateMethod)
         {
             IntPtr config = API.Tango3DR_Config_create((int)APIConfigType.Context);
             API.Tango3DR_Config_setDouble(config, "resolution", resolution);
             API.Tango3DR_Config_setBool(config, "generate_color", generateColor);
             API.Tango3DR_Config_setBool(config, "use_space_clearing", spaceClearing);
+            API.Tango3DR_Config_setInt32(config, "min_num_vertices", minNumVertices);
+            API.Tango3DR_Config_setInt32(config, "update_method", (int)updateMethod);
 
             // The 3D Reconstruction library can not handle a left handed transformation during update.  Instead,
             // transform into the Unity world space via the external_T_tango config.
@@ -143,10 +146,47 @@ namespace Tango
         /// </summary>
         public enum Status
         {
+            /// <summary>
+            /// An error occured.
+            /// </summary>
             ERROR = -3,
+
+            /// <summary>
+            /// Extraction was only partially successful. The data filled out
+            /// is valid, but there is more data available.
+            /// </summary>
             INSUFFICIENT_SPACE = -2,
+
+            /// <summary>
+            /// Invalid parameters were passed in.
+            /// </summary>
             INVALID = -1,
+
+            /// <summary>
+            /// The operation was successful.
+            /// </summary>
             SUCCESS = 0
+        }
+
+        /// <summary>
+        /// Corresponds to a Tango3DR_UpdateMethod.
+        /// </summary>
+        public enum UpdateMethod
+        {
+            /// <summary>
+            /// Associates voxels with depth readings by traversing (raycasting) forward from the camera to the
+            /// observed depth. Results in slightly higher reconstruction quality. Can be significantly slower,
+            /// especially on updates with a high number of depth points.
+            /// </summary>
+            TRAVERSAL = 0,
+
+            /// <summary>
+            /// Associates voxels with depth readings by projecting voxels into a depth  image plane using a
+            /// projection matrix. Requires that the depth camera calibration has been set using the
+            /// Tango3DR_setDepthCalibration method. Results in slightly lower reconstruction quality. Under this mode,
+            /// the speed of updates is independent of the number of depth points.
+            /// </summary>
+            PROJECTIVE = 1,
         }
 
         /// @cond
@@ -195,11 +235,76 @@ namespace Tango
         }
 
         /// <summary>
-        /// This is called when succesfully connected to the Tango service.
+        /// This is called when successfully connected to the Tango service.
         /// </summary>
         public void OnTangoServiceConnected()
         {
-            _UpdateExtrinsics();
+            // Calculate the camera extrinsics.
+            TangoCoordinateFramePair pair;
+
+            TangoPoseData imu_T_devicePose = new TangoPoseData();
+            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
+            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE;
+            PoseProvider.GetPoseAtTime(imu_T_devicePose, 0, pair);
+
+            TangoPoseData imu_T_depthCameraPose = new TangoPoseData();
+            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
+            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_CAMERA_DEPTH;
+            PoseProvider.GetPoseAtTime(imu_T_depthCameraPose, 0, pair);
+
+            TangoPoseData imu_T_colorCameraPose = new TangoPoseData();
+            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
+            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_CAMERA_COLOR;
+            PoseProvider.GetPoseAtTime(imu_T_colorCameraPose, 0, pair);
+
+            // Convert into matrix form to combine the poses.
+            Matrix4x4 device_T_imu = Matrix4x4.Inverse(imu_T_devicePose.ToMatrix4x4());
+            m_device_T_depthCamera = device_T_imu * imu_T_depthCameraPose.ToMatrix4x4();
+            m_device_T_colorCamera = device_T_imu * imu_T_colorCameraPose.ToMatrix4x4();
+
+            // Update the camera intrinsics.
+            TangoCameraIntrinsics intrinsics = new TangoCameraIntrinsics();
+            Status status;
+
+            APICameraCalibration colorCameraCalibration;
+            VideoOverlayProvider.GetIntrinsics(TangoEnums.TangoCameraId.TANGO_CAMERA_COLOR, intrinsics);
+            colorCameraCalibration.calibration_type = (int)intrinsics.calibration_type;
+            colorCameraCalibration.width = intrinsics.width;
+            colorCameraCalibration.height = intrinsics.height;
+            colorCameraCalibration.cx = intrinsics.cx;
+            colorCameraCalibration.cy = intrinsics.cy;
+            colorCameraCalibration.fx = intrinsics.fx;
+            colorCameraCalibration.fy = intrinsics.fy;
+            colorCameraCalibration.distortion0 = intrinsics.distortion0;
+            colorCameraCalibration.distortion1 = intrinsics.distortion1;
+            colorCameraCalibration.distortion2 = intrinsics.distortion2;
+            colorCameraCalibration.distortion3 = intrinsics.distortion3;
+            colorCameraCalibration.distortion4 = intrinsics.distortion4;
+            status = (Status)API.Tango3DR_setColorCalibration(m_context, ref colorCameraCalibration);
+            if (status != Status.SUCCESS)
+            {
+                Debug.Log("Unable to set color calibration." + Environment.StackTrace);
+            }
+
+            APICameraCalibration depthCameraCalibration;
+            VideoOverlayProvider.GetIntrinsics(TangoEnums.TangoCameraId.TANGO_CAMERA_DEPTH, intrinsics);
+            depthCameraCalibration.calibration_type = (int)intrinsics.calibration_type;
+            depthCameraCalibration.width = intrinsics.width;
+            depthCameraCalibration.height = intrinsics.height;
+            depthCameraCalibration.cx = intrinsics.cx;
+            depthCameraCalibration.cy = intrinsics.cy;
+            depthCameraCalibration.fx = intrinsics.fx;
+            depthCameraCalibration.fy = intrinsics.fy;
+            depthCameraCalibration.distortion0 = intrinsics.distortion0;
+            depthCameraCalibration.distortion1 = intrinsics.distortion1;
+            depthCameraCalibration.distortion2 = intrinsics.distortion2;
+            depthCameraCalibration.distortion3 = intrinsics.distortion3;
+            depthCameraCalibration.distortion4 = intrinsics.distortion4;
+            status = (Status)API.Tango3DR_setDepthCalibration(m_context, ref depthCameraCalibration);
+            if (status != Status.SUCCESS)
+            {
+                Debug.Log("Unable to set depth calibration." + Environment.StackTrace);
+            }
         }
 
         /// <summary>
@@ -215,10 +320,10 @@ namespace Tango
         /// 
         /// On the Tango tablet, the depth callback occurs at 5 Hz.
         /// </summary>
-        /// <param name="tangoDepth">Tango depth.</param>
-        public void OnTangoDepthMultithreadedAvailable(TangoXYZij tangoDepth)
+        /// <param name="pointCloud">Tango depth.</param>
+        public void OnTangoPointCloudMultithreadedAvailable(ref TangoPointCloudIntPtr pointCloud)
         {
-            if (!m_enabled)
+            if (!m_enabled || pointCloud.m_points == IntPtr.Zero)
             {
                 return;
             }
@@ -230,21 +335,20 @@ namespace Tango
                 TangoCoordinateFramePair pair;
                 pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_AREA_DESCRIPTION;
                 pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE;
-                PoseProvider.GetPoseAtTime(world_T_devicePose, tangoDepth.timestamp, pair);
+                PoseProvider.GetPoseAtTime(world_T_devicePose, pointCloud.m_timestamp, pair);
             }
             else
             {
                 TangoCoordinateFramePair pair;
                 pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_START_OF_SERVICE;
                 pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE;
-                PoseProvider.GetPoseAtTime(world_T_devicePose, tangoDepth.timestamp, pair);
+                PoseProvider.GetPoseAtTime(world_T_devicePose, pointCloud.m_timestamp, pair);
             }
 
             if (world_T_devicePose.status_code != TangoEnums.TangoPoseStatusType.TANGO_POSE_VALID)
             {
-                Debug.Log(string.Format("Time {0} has bad status code {1}", 
-                                        tangoDepth.timestamp, world_T_devicePose.status_code)
-                          + Environment.StackTrace);
+                Debug.LogFormat("Time {0} has bad status code {1}{2}", 
+                                pointCloud.m_timestamp, world_T_devicePose.status_code, Environment.StackTrace);
                 return;
             }
 
@@ -252,7 +356,7 @@ namespace Tango
             // transform into the Unity world space via the external_T_tango config.
             Matrix4x4 world_T_depthCamera = world_T_devicePose.ToMatrix4x4() * m_device_T_depthCamera;
 
-            _UpdateDepth(tangoDepth, world_T_depthCamera);
+            _UpdateDepth(pointCloud, world_T_depthCamera);
         }
 
         /// <summary>
@@ -363,20 +467,20 @@ namespace Tango
         /// Extract a mesh for a single grid index, into a suitable format for Unity Mesh.
         /// </summary>
         /// <returns>
-        /// Returns Status.SUCCESS if the mesh is fully extracted and stored in the arrays.  In this case, numVertices 
-        /// and numTriangles will say how many vertices and triangles are used, the rest of the array is untouched.
+        /// Returns Status.SUCCESS if the mesh is fully extracted and stored in the arrays.  In this case, <c>numVertices</c> 
+        /// and <c>numTriangles</c> will say how many vertices and triangles are used, the rest of the array is untouched.
         /// 
-        /// Returns Status.INSUFFICIENT_SPACE if the mesh is partially extracted and stored in the arrays.  numVertices 
-        /// and numTriangles have the same meaning as if Status.SUCCESS is returned, but in this case the array should 
+        /// Returns Status.INSUFFICIENT_SPACE if the mesh is partially extracted and stored in the arrays.  <c>numVertices</c> 
+        /// and <c>numTriangles</c> have the same meaning as if Status.SUCCESS is returned, but in this case the array should 
         /// grow.
         /// 
         /// Returns Status.ERROR or Status.INVALID if some other error occurs.
         /// </returns>
         /// <param name="gridIndex">Grid index to extract.</param>
         /// <param name="vertices">On successful extraction this will get filled out with the vertex positions.</param>
-        /// <param name="normals">On successful extraction this will get filled out whith vertex normals.</param>
+        /// <param name="normals">On successful extraction this will get filled out with vertex normals.</param>
         /// <param name="colors">On successful extraction this will get filled out with vertex colors.</param>
-        /// <param name="triangles">On succesful extraction this will get filled out with vertex indexes.</param>
+        /// <param name="triangles">On successful extraction this will get filled out with vertex indexes.</param>
         /// <param name="numVertices">Number of vertexes filled out.</param>
         /// <param name="numTriangles">Number of triangles filled out.</param>
         internal Status ExtractMeshSegment(
@@ -395,35 +499,38 @@ namespace Tango
         }
 
         /// <summary>
-        /// Extract a mesh for the entire 3D Reconstruction, into a suitable format for Unity Mesh.
+        /// Extracts a mesh of the entire 3D reconstruction into a suitable format for a Unity Mesh.
         /// </summary>
         /// <returns>
-        /// Returns Status.SUCCESS if the mesh is fully extracted and stored in the arrays.  In this case, numVertices 
-        /// and numTriangles will say how many vertices and triangles are used, the rest of the array is untouched.
-        /// 
-        /// Returns Status.INSUFFICIENT_SPACE if the mesh is partially extracted and stored in the arrays.  numVertices 
-        /// and numTriangles have the same meaning as if Status.SUCCESS is returned, but in this case the array should 
-        /// grow.
-        /// 
-        /// Returns Status.ERROR or Status.INVALID if some other error occurs.
-        /// </returns>
-        /// <param name="vertices">On successful extraction this will get filled out with the vertex positions.</param>
-        /// <param name="normals">On successful extraction this will get filled out whith vertex normals.</param>
-        /// <param name="colors">On successful extraction this will get filled out with vertex colors.</param>
-        /// <param name="triangles">On succesful extraction this will get filled out with vertex indexes.</param>
-        /// <param name="numVertices">Number of vertexes filled out.</param>
-        /// <param name="numTriangles">Number of triangles filled out.</param>
-        internal Status ExtractWholeMesh(
-            Vector3[] vertices, Vector3[] normals, Color32[] colors, int[] triangles, out int numVertices,
-            out int numTriangles)
+        /// Returns <c>Status.SUCCESS</c> if the mesh is fully extracted and stored in the lists. Otherwise, Status.ERROR or 
+        /// Status.INVALID is returned if some error occurs.</returns>
+        /// <param name="vertices">A list to which mesh vertices will be appended, can be null.</param>
+        /// <param name="normals">A list to which mesh normals will be appended, can be null.</param>
+        /// <param name="colors">A list to which mesh colors will be appended, can be null.</param>
+        /// <param name="triangles">A list to which vertex indices will be appended, can be null.</param>
+        internal Status ExtractWholeMesh(List<Vector3> vertices, List<Vector3> normals, List<Color32> colors, List<int> triangles)
         {
-            APIMeshGCHandles pinnedHandles = APIMeshGCHandles.Alloc(vertices, normals, colors, triangles);
-            APIMesh mesh = APIMesh.FromArrays(vertices, normals, colors, triangles);
+            IntPtr apiMeshIntPtr;
+            int result = API.Tango3DR_extractFullMesh(m_context, out apiMeshIntPtr);
 
-            int result = API.Tango3DR_extractPreallocatedFullMesh(m_context, ref mesh);
-            numVertices = (int)mesh.numVertices;
-            numTriangles = (int)mesh.numFaces;
-            pinnedHandles.Free();
+            if (((Status)result) == Status.SUCCESS)
+            {
+                // Marshal mesh structure into managed code.
+                APIMesh mesh = (APIMesh)Marshal.PtrToStructure(apiMeshIntPtr, typeof(APIMesh));
+
+                // Marshal structure arrays into managed code.
+                _MarshalUnmanagedStructArrayToList<Vector3>(mesh.vertices, mesh.numVertices, vertices);
+                _MarshalUnmanagedStructArrayToList<Vector3>(mesh.normals, mesh.numVertices, normals);
+                _MarshalUnmanagedStructArrayToList<Color32>(mesh.colors, mesh.numVertices, colors);
+
+                // Marshal face array to managed code and add to list.
+                int[] faces = new int[mesh.numFaces * 3];
+                Marshal.Copy(mesh.faces, faces, 0, mesh.numFaces * 3);
+                triangles.AddRange(faces);
+
+                // Free unmanaged mesh memory.
+                API.Tango3DR_Mesh_destroy(apiMeshIntPtr);
+            }
 
             return (Status)result;
         }
@@ -432,7 +539,7 @@ namespace Tango
         /// Extract an array of <c>SignedDistanceVoxel</c> objects.
         /// </summary>
         /// <returns>
-        /// Returns Status.SUCCESS if the voxels are fully extracted and stared in the array.  In this case, numVoxels
+        /// Returns Status.SUCCESS if the voxels are fully extracted and stared in the array.  In this case, <c>numVoxels</c>
         /// will say how many voxels are used, the rest of the array is untouched.
         /// 
         /// Returns Status.INVALID if the array length does not exactly equal the number of voxels in a single grid
@@ -473,13 +580,45 @@ namespace Tango
         }
 
         /// <summary>
+        /// Adds the contents of an unmanaged struct array to a list.
+        /// </summary>
+        /// <param name="arrayPtr">A pointer to the unmanged array.</param>
+        /// <param name="arrayLength">The length of the unmanaged array.</param>
+        /// <param name="list">A list to append array elements to.</param>
+        /// <typeparam name="T">The type contained by the unmanaged array.</typeparam>
+        private void _MarshalUnmanagedStructArrayToList<T>(IntPtr arrayPtr, int arrayLength, List<T> list) where T : struct
+        {
+            if (arrayPtr == IntPtr.Zero || list == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < arrayLength; i++)
+            {
+                list.Add((T)Marshal.PtrToStructure(_GetPtrToUnmanagedArrayElement<T>(arrayPtr, i), typeof(T)));
+            }
+        }
+
+        /// <summary>
+        /// Returns a pointer to an element within an unmanaged array.
+        /// </summary>
+        /// <returns>A pointer to the desired unmanaged array element.</returns>
+        /// <param name="arrayPtr">A pointer to the start of the array.</param>
+        /// <param name="arrayIndex">The index of the desired element pointer.</param>
+        /// <typeparam name="T">The type contained by the unmanaged array.</typeparam>
+        private IntPtr _GetPtrToUnmanagedArrayElement<T>(IntPtr arrayPtr, int arrayIndex) where T : struct
+        {
+            return new IntPtr(arrayPtr.ToInt64() + (Marshal.SizeOf(typeof(T)) * arrayIndex));
+        }
+
+        /// <summary>
         /// Update the 3D Reconstruction with a new point cloud and pose.
         /// 
         /// It is expected this will get called in from the Tango binder thread.
         /// </summary>
-        /// <param name="depth">Point cloud from Tango.</param>
+        /// <param name="pointCloud">Point cloud from Tango.</param>
         /// <param name="depthPose">Pose matrix the point cloud corresponds too.</param>
-        private void _UpdateDepth(TangoXYZij depth, Matrix4x4 depthPose)
+        private void _UpdateDepth(TangoPointCloudIntPtr pointCloud, Matrix4x4 depthPose)
         {
             if (m_context == IntPtr.Zero)
             {
@@ -488,32 +627,18 @@ namespace Tango
             }
 
             APIPointCloud apiCloud;
-            apiCloud.numPoints = depth.xyz_count;
-            apiCloud.points = IntPtr.Zero;
-            apiCloud.timestamp = depth.timestamp;
-
-            // This copy is required until TangoXYZij stores its depth as XYZC.
-            long xyzPointerVal = depth.xyz.ToInt64();
-            for (int it = 0; it < depth.xyz_count; ++it)
-            {
-                int xyzIndex = it * 3;
-                int depthPointsIndex = it * 4;
-                Marshal.Copy(new IntPtr(xyzPointerVal + (xyzIndex * 4)), m_mostRecentDepthPoints, depthPointsIndex, 3);
-                m_mostRecentDepthPoints[depthPointsIndex + 3] = 1;
-            }
+            apiCloud.numPoints = pointCloud.m_numPoints;
+            apiCloud.points = pointCloud.m_points;
+            apiCloud.timestamp = pointCloud.m_timestamp;
 
             APIPose apiDepthPose = APIPose.FromMatrix4x4(ref depthPose);
 
             if (!m_sendColorToUpdate)
             {
-                GCHandle mostRecentDepthPointsHandle = GCHandle.Alloc(m_mostRecentDepthPoints, GCHandleType.Pinned);
-                apiCloud.points = Marshal.UnsafeAddrOfPinnedArrayElement(m_mostRecentDepthPoints, 0);
-
                 // No need to wait for a color image, update reconstruction immediately.
                 IntPtr rawUpdatedIndices;
                 Status result = (Status)API.Tango3DR_update(
-                    m_context, ref apiCloud, ref apiDepthPose, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
-                    out rawUpdatedIndices);
+                    m_context, ref apiCloud, ref apiDepthPose, IntPtr.Zero, IntPtr.Zero, out rawUpdatedIndices);
                 if (result != Status.SUCCESS)
                 {
                     Debug.Log("Tango3DR_update returned non-success." + Environment.StackTrace);
@@ -522,8 +647,6 @@ namespace Tango
 
                 _AddUpdatedIndices(rawUpdatedIndices);
                 API.Tango3DR_GridIndexArray_destroy(rawUpdatedIndices);
-
-                mostRecentDepthPointsHandle.Free();
             }
             else
             {
@@ -532,6 +655,9 @@ namespace Tango
                     // We need both a color image and a depth cloud to update reconstruction.  Cache the depth cloud
                     // because there are much less depth points than pixels.
                     m_mostRecentDepth = apiCloud;
+                    m_mostRecentDepth.points = IntPtr.Zero;
+                    Marshal.Copy(pointCloud.m_points, m_mostRecentDepthPoints, 0, pointCloud.m_numPoints * 4);
+
                     m_mostRecentDepthPose = apiDepthPose;
                     m_mostRecentDepthIsValid = true;
                 }
@@ -580,16 +706,12 @@ namespace Tango
                 GCHandle mostRecentDepthPointsHandle = GCHandle.Alloc(m_mostRecentDepthPoints, GCHandleType.Pinned);
                 m_mostRecentDepth.points = Marshal.UnsafeAddrOfPinnedArrayElement(m_mostRecentDepthPoints, 0);
 
-                GCHandle thisHandle = GCHandle.Alloc(this, GCHandleType.Pinned);
-
                 IntPtr rawUpdatedIndices;
                 Status result = (Status)API.Tango3DR_update(
                     m_context, ref m_mostRecentDepth, ref m_mostRecentDepthPose,
-                    ref apiImage, ref apiImagePose, ref m_colorCameraIntrinsics, 
-                    out rawUpdatedIndices);
+                    ref apiImage, ref apiImagePose, out rawUpdatedIndices);
 
                 m_mostRecentDepthIsValid = false;
-                thisHandle.Free();
                 mostRecentDepthPointsHandle.Free();
 
                 if (result != Status.SUCCESS)
@@ -606,7 +728,7 @@ namespace Tango
         /// <summary>
         /// Add to the list of updated GridIndex objects that gets sent to the main thread.
         /// </summary>
-        /// <param name="rawUpdatedIndices">IntPtr to a list of updated indices.</param>
+        /// <param name="rawUpdatedIndices"><c>IntPtr</c> to a list of updated indices.</param>
         private void _AddUpdatedIndices(IntPtr rawUpdatedIndices)
         {
             int numUpdatedIndices = Marshal.ReadInt32(rawUpdatedIndices, 0);
@@ -644,61 +766,26 @@ namespace Tango
         }
 
         /// <summary>
-        /// Calculate the camera extrinsics for this device.
-        /// </summary>
-        private void _UpdateExtrinsics()
-        {
-            TangoCoordinateFramePair pair;
-
-            TangoPoseData imu_T_devicePose = new TangoPoseData();
-            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
-            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE;
-            PoseProvider.GetPoseAtTime(imu_T_devicePose, 0, pair);
-
-            TangoPoseData imu_T_depthCameraPose = new TangoPoseData();
-            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
-            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_CAMERA_DEPTH;
-            PoseProvider.GetPoseAtTime(imu_T_depthCameraPose, 0, pair);
-
-            TangoPoseData imu_T_colorCameraPose = new TangoPoseData();
-            pair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_IMU;
-            pair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_CAMERA_COLOR;
-            PoseProvider.GetPoseAtTime(imu_T_colorCameraPose, 0, pair);
-
-            // Convert into matrix form to combine the poses.
-            Matrix4x4 device_T_imu = Matrix4x4.Inverse(imu_T_devicePose.ToMatrix4x4());
-            m_device_T_depthCamera = device_T_imu * imu_T_depthCameraPose.ToMatrix4x4();
-            m_device_T_colorCamera = device_T_imu * imu_T_colorCameraPose.ToMatrix4x4();
-
-            // Update the camera intrinsics too.
-            TangoCameraIntrinsics colorCameraIntrinsics = new TangoCameraIntrinsics();
-            VideoOverlayProvider.GetIntrinsics(TangoEnums.TangoCameraId.TANGO_CAMERA_COLOR, colorCameraIntrinsics);
-            m_colorCameraIntrinsics.calibration_type = (int)colorCameraIntrinsics.calibration_type;
-            m_colorCameraIntrinsics.width = colorCameraIntrinsics.width;
-            m_colorCameraIntrinsics.height = colorCameraIntrinsics.height;
-            m_colorCameraIntrinsics.cx = colorCameraIntrinsics.cx;
-            m_colorCameraIntrinsics.cy = colorCameraIntrinsics.cy;
-            m_colorCameraIntrinsics.fx = colorCameraIntrinsics.fx;
-            m_colorCameraIntrinsics.fy = colorCameraIntrinsics.fy;
-            m_colorCameraIntrinsics.distortion0 = colorCameraIntrinsics.distortion0;
-            m_colorCameraIntrinsics.distortion1 = colorCameraIntrinsics.distortion1;
-            m_colorCameraIntrinsics.distortion2 = colorCameraIntrinsics.distortion2;
-            m_colorCameraIntrinsics.distortion3 = colorCameraIntrinsics.distortion3;
-            m_colorCameraIntrinsics.distortion4 = colorCameraIntrinsics.distortion4;
-        }
-
-        /// <summary>
         /// Indexes into the 3D Reconstruction mesh's grid cells.
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct GridIndex
         {
+            /// <summary>
+            /// Index in 3D reconstrction's X direction.
+            /// </summary>
             [MarshalAs(UnmanagedType.I4)]
             public Int32 x;
 
+            /// <summary>
+            /// Index in 3D reconstruction's Y direction.
+            /// </summary>
             [MarshalAs(UnmanagedType.I4)]
             public Int32 y;
 
+            /// <summary>
+            /// Index in 3D reconstruction's Z direction.
+            /// </summary>
             [MarshalAs(UnmanagedType.I4)]
             public Int32 z;
         }
@@ -713,8 +800,8 @@ namespace Tango
             /// The signed distance function's value, in normalized units.
             /// 
             /// The signed distance function is stored as a truncated signed distance function.  The floating point
-            /// value is represented as a signed integer where Int16.MinValue represents the most negative value 
-            /// possible and Int16.MaxValue represents the most positive value possible.
+            /// value is represented as a signed integer where <c>Int16.MinValue</c> represents the most negative value 
+            /// possible and <c>Int16.MaxValue</c> represents the most positive value possible.
             /// </summary>
             [MarshalAs(UnmanagedType.I2)]
             public Int16 sdf;
@@ -722,7 +809,7 @@ namespace Tango
             /// <summary>
             /// Observation weight.
             /// 
-            /// The greater this value, the more certain the system is about the value in sdf.
+            /// The greater this value, the more certain the system is about the value in <c>sdf</c>.
             /// </summary>
             [MarshalAs(UnmanagedType.U2)]
             public UInt16 weight;
@@ -927,10 +1014,10 @@ namespace Tango
             }
 
             /// <summary>
-            /// Get the address for the start of an Array, or IntPtr.Zero if the array is null.
+            /// Get the address for the start of an Array, or <c>IntPtr.Zero</c> if the array is null.
             /// </summary>
-            /// <returns>IntPtr representing the address of the start of the array.</returns>
-            /// <param name="array">Array to get the addres of.</param>
+            /// <returns><c>IntPtr</c> representing the address of the start of the array.</returns>
+            /// <param name="array">Array to get the address of.</param>
             private static IntPtr _AddrOfOptionalArray(Array array)
             {
                 if (array == null)
@@ -1086,6 +1173,9 @@ namespace Tango
             public static extern int Tango3DR_Config_destroy(IntPtr config);
 
             [DllImport(TANGO_3DR_DLL)]
+            public static extern int Tango3DR_Mesh_destroy(IntPtr mesh);
+
+            [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_Config_setBool(IntPtr config, string key, bool value);
 
             [DllImport(TANGO_3DR_DLL)]
@@ -1110,6 +1200,12 @@ namespace Tango
             public static extern int Tango3DR_Config_getMatrix3x3(IntPtr config, string key, out APIMatrix3x3 value);
 
             [DllImport(TANGO_3DR_DLL)]
+            public static extern int Tango3DR_setColorCalibration(IntPtr contxet, ref APICameraCalibration calibration);
+
+            [DllImport(TANGO_3DR_DLL)]
+            public static extern int Tango3DR_setDepthCalibration(IntPtr contxet, ref APICameraCalibration calibration);
+
+            [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_GridIndexArray_destroy(IntPtr gridIndexArray);
 
             [DllImport(TANGO_3DR_DLL)]
@@ -1118,12 +1214,11 @@ namespace Tango
             [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_update(IntPtr context, ref APIPointCloud cloud, ref APIPose cloud_pose,
                                                      ref APIImageBuffer image, ref APIPose image_pose,
-                                                     ref APICameraCalibration calibration, out IntPtr updated_indices);
+                                                     out IntPtr updated_indices);
 
             [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_update(IntPtr context, ref APIPointCloud cloud, ref APIPose cloud_pose,
-                                                     IntPtr image, IntPtr image_pose, IntPtr calibration, 
-                                                     out IntPtr updated_indices);
+                                                     IntPtr image, IntPtr image_pose, out IntPtr updated_indices);
 
             [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_extractPreallocatedMeshSegment(
@@ -1133,15 +1228,23 @@ namespace Tango
             public static extern int Tango3DR_extractPreallocatedFullMesh(IntPtr context, ref APIMesh mesh);
 
             [DllImport(TANGO_3DR_DLL)]
+            public static extern int Tango3DR_extractFullMesh(IntPtr context, out IntPtr mesh);
+
+            [DllImport(TANGO_3DR_DLL)]
             public static extern int Tango3DR_extractPreallocatedVoxelGridSegment(
                 IntPtr context, ref GridIndex gridIndex, Int32 maxNumVoxels, SignedDistanceVoxel[] voxels);
-            #else
+#else
             public static IntPtr Tango3DR_create(IntPtr config)
             {
                 return IntPtr.Zero;
             }
 
             public static int Tango3DR_destroy(IntPtr context)
+            {
+                return (int)Status.SUCCESS;
+            }
+
+            public static int Tango3DR_Mesh_destroy(IntPtr mesh)
             {
                 return (int)Status.SUCCESS;
             }
@@ -1201,6 +1304,16 @@ namespace Tango
                 return (int)Status.SUCCESS;
             }
 
+            public static int Tango3DR_setColorCalibration(IntPtr contxet, ref APICameraCalibration calibration)
+            {
+                return (int)Status.SUCCESS;
+            }
+
+            public static int Tango3DR_setDepthCalibration(IntPtr contxet, ref APICameraCalibration calibration)
+            {
+                return (int)Status.SUCCESS;
+            }
+
             public static int Tango3DR_GridIndexArray_destroy(IntPtr gridIndexArray)
             {
                 return (int)Status.SUCCESS;
@@ -1213,14 +1326,14 @@ namespace Tango
 
             public static int Tango3DR_update(IntPtr context, ref APIPointCloud cloud, ref APIPose cloud_pose,
                                               ref APIImageBuffer image, ref APIPose image_pose,
-                                              ref APICameraCalibration calibration, out IntPtr updated_indices)
+                                              out IntPtr updated_indices)
             {
                 updated_indices = IntPtr.Zero;
                 return (int)Status.SUCCESS;
             }
 
             public static int Tango3DR_update(IntPtr context, ref APIPointCloud cloud, ref APIPose cloud_pose,
-                                              IntPtr image, IntPtr image_pose, IntPtr calibration,
+                                              IntPtr image, IntPtr image_pose,
                                               out IntPtr updated_indices)
             {
                 updated_indices = IntPtr.Zero;
@@ -1244,12 +1357,18 @@ namespace Tango
                 return (int)Status.SUCCESS;
             }
 
+            public static int Tango3DR_extractFullMesh(IntPtr context, out IntPtr mesh)
+            {
+                mesh = new IntPtr();
+                return (int)Status.SUCCESS;
+            }
+
             public static int Tango3DR_extractPreallocatedVoxelGridSegment(
                 IntPtr context, ref GridIndex gridIndex, Int32 maxNumVoxels, SignedDistanceVoxel[] voxels)
             {
                 return (int)Status.SUCCESS;
             }
-            #endif
+#endif
         }
     }
 }

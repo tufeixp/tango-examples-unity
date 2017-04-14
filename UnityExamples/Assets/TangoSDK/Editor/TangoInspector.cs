@@ -37,7 +37,8 @@ public class TangoInspector : Editor
     {
         m_tangoApplication.m_autoConnectToService = EditorGUILayout.Toggle("Auto-connect to Service",
                                                                            m_tangoApplication.m_autoConnectToService);
-        if (m_tangoApplication.m_autoConnectToService && m_tangoApplication.m_enableAreaDescriptions)
+        if (m_tangoApplication.m_autoConnectToService && m_tangoApplication.m_enableAreaDescriptions &&
+            !m_tangoApplication.m_enableDriftCorrection)
         {
             EditorGUILayout.HelpBox("Note that auto-connect does not supply a chance "
                                     + "to specify an Area Description.", MessageType.Warning);
@@ -50,6 +51,7 @@ public class TangoInspector : Editor
         _DrawDepthOptions(m_tangoApplication);
         _DrawVideoOverlayOptions(m_tangoApplication);
         _Draw3DReconstructionOptions(m_tangoApplication);
+        _DrawPerformanceOptions(m_tangoApplication);
         _DrawEmulationOptions(m_tangoApplication);
         _DrawDevelopmentOptions(m_tangoApplication);
 
@@ -68,8 +70,9 @@ public class TangoInspector : Editor
 
         // Fixup the old state of TangoApplication before there were two checkboxes.  If only m_enableVideoOverlay was
         // set, then that meant to use the Byte Buffer method.
-        if (m_tangoApplication.m_enableVideoOverlay && !m_tangoApplication.m_videoOverlayUseByteBufferMethod
-            && !m_tangoApplication.m_videoOverlayUseTextureIdMethod)
+        if (m_tangoApplication.m_enableVideoOverlay && !m_tangoApplication.m_videoOverlayUseTextureMethod
+            && !m_tangoApplication.m_videoOverlayUseYUVTextureIdMethod
+            && !m_tangoApplication.m_videoOverlayUseByteBufferMethod)
         {
             m_tangoApplication.m_videoOverlayUseByteBufferMethod = true;
         }
@@ -100,15 +103,77 @@ public class TangoInspector : Editor
     /// <param name="tangoApplication">Tango application.</param>
     private void _DrawAreaDescriptionOptions(TangoApplication tangoApplication)
     {
-        tangoApplication.m_enableAreaDescriptions = EditorGUILayout.Toggle(
-            "Enable Area Descriptions", tangoApplication.m_enableAreaDescriptions);
-
-        if (tangoApplication.m_enableAreaDescriptions)
+        string[] options = new string[]
         {
-            ++EditorGUI.indentLevel;
-            tangoApplication.m_areaDescriptionLearningMode = EditorGUILayout.Toggle(
-                "Learning Mode", tangoApplication.m_areaDescriptionLearningMode);
-            --EditorGUI.indentLevel;
+            "Motion Tracking",
+            "Motion Tracking (with Drift Correction)",
+            "Local Area Description (Load Existing)",
+            "Local Area Description (Learning)",
+            "Cloud Area Description"
+        };
+        int selectedOption = 0;
+        if (tangoApplication.m_enableDriftCorrection)
+        {
+            selectedOption = 1;
+        }
+        else if (tangoApplication.m_enableAreaDescriptions)
+        {
+            if (tangoApplication.m_areaDescriptionLearningMode)
+            {
+                selectedOption = 3;
+            }
+            else if (tangoApplication.m_enableCloudADF)
+            {
+                selectedOption = 4;
+            }
+            else
+            {
+                selectedOption = 2;
+            }
+        }
+
+        switch (EditorGUILayout.Popup("Pose Mode", selectedOption, options))
+        {
+        case 1: // motion tracking with drift correction
+            tangoApplication.m_enableDriftCorrection = true;
+            tangoApplication.m_enableAreaDescriptions = false;
+            tangoApplication.m_areaDescriptionLearningMode = false;
+            tangoApplication.m_enableCloudADF = false;
+            break;
+        case 2: // area learning, load existing local
+            tangoApplication.m_enableDriftCorrection = false;
+            tangoApplication.m_enableAreaDescriptions = true;
+            tangoApplication.m_areaDescriptionLearningMode = false;
+            tangoApplication.m_enableCloudADF = false;
+            break;
+        case 3: // area learning, local learning mode
+            tangoApplication.m_enableDriftCorrection = false;
+            tangoApplication.m_enableAreaDescriptions = true;
+            tangoApplication.m_areaDescriptionLearningMode = true;
+            tangoApplication.m_enableCloudADF = false;
+            break;
+        case 4: // area learning, cloud mode
+            tangoApplication.m_enableDriftCorrection = false;
+            tangoApplication.m_enableAreaDescriptions = true;
+            tangoApplication.m_areaDescriptionLearningMode = false;
+            tangoApplication.m_enableCloudADF = true;
+            break;
+        default: // case 0, motion tracking
+            tangoApplication.m_enableDriftCorrection = false;
+            tangoApplication.m_enableAreaDescriptions = false;
+            tangoApplication.m_areaDescriptionLearningMode = false;
+            tangoApplication.m_enableCloudADF = false;
+            break;
+        }
+
+        if (m_tangoApplication.m_enableDriftCorrection)
+        {
+            EditorGUILayout.HelpBox("Drift correction mode is experimental.", MessageType.Warning);
+        }
+
+        if (m_tangoApplication.m_enableCloudADF)
+        {
+            EditorGUILayout.HelpBox("Cloud Area Descriptions is experimental.", MessageType.Warning);
         }
 
         EditorGUILayout.Space();
@@ -138,20 +203,42 @@ public class TangoInspector : Editor
             
             string[] options = new string[]
             {
-                "TextureID (IExperimentalTangoVideoOverlay)",
+                "Texture (ITangoCameraTexture)",
+                "YUV Texture (IExperimentalTangoVideoOverlay)",
                 "Raw Bytes (ITangoVideoOverlay)",
-                "Both",
+                "Texture and Raw Bytes",
+                "YUV Texture and Raw Bytes",
+                "Texture and YUV Texture",
+                "All",
             };
+
             int selectedOption;
-            if (tangoApplication.m_videoOverlayUseTextureIdMethod && tangoApplication.m_videoOverlayUseByteBufferMethod)
+            if (tangoApplication.m_videoOverlayUseTextureMethod
+                && tangoApplication.m_videoOverlayUseYUVTextureIdMethod
+                && tangoApplication.m_videoOverlayUseByteBufferMethod)
+            {
+                selectedOption = 6;
+            }
+            else if (tangoApplication.m_videoOverlayUseTextureMethod
+                     && tangoApplication.m_videoOverlayUseYUVTextureIdMethod)
+            {
+                selectedOption = 5;
+            }
+            else if (tangoApplication.m_videoOverlayUseYUVTextureIdMethod
+                     && tangoApplication.m_videoOverlayUseByteBufferMethod)
+            {
+                selectedOption = 4;
+            }
+            else if (tangoApplication.m_videoOverlayUseTextureMethod
+                     && tangoApplication.m_videoOverlayUseByteBufferMethod)
+            {
+                selectedOption = 3;
+            }
+            else if (tangoApplication.m_videoOverlayUseByteBufferMethod)
             {
                 selectedOption = 2;
             }
-            else if (tangoApplication.m_videoOverlayUseTextureIdMethod)
-            {
-                selectedOption = 0;
-            }
-            else if (tangoApplication.m_videoOverlayUseByteBufferMethod)
+            else if (tangoApplication.m_videoOverlayUseYUVTextureIdMethod)
             {
                 selectedOption = 1;
             }
@@ -162,29 +249,54 @@ public class TangoInspector : Editor
 
             switch (EditorGUILayout.Popup("Method", selectedOption, options))
             {
-            case 0:
-                tangoApplication.m_videoOverlayUseTextureIdMethod = true;
-                tangoApplication.m_videoOverlayUseByteBufferMethod = false;
-                break;
-            case 1:
-                tangoApplication.m_videoOverlayUseTextureIdMethod = false;
-                tangoApplication.m_videoOverlayUseByteBufferMethod = true;
-                break;
-            case 2:
-                tangoApplication.m_videoOverlayUseTextureIdMethod = true;
-                tangoApplication.m_videoOverlayUseByteBufferMethod = true;
-                break;
-            default:
-                tangoApplication.m_videoOverlayUseTextureIdMethod = true;
-                tangoApplication.m_videoOverlayUseByteBufferMethod = false;
-                break;
+                case 0:
+                    tangoApplication.m_videoOverlayUseTextureMethod = true;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = false;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = false;
+                    break;
+                case 1:
+                    tangoApplication.m_videoOverlayUseTextureMethod = false;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = true;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = false;
+                    break;
+                case 2:
+                    tangoApplication.m_videoOverlayUseTextureMethod = false;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = false;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = true;
+                    break;
+                case 3:
+                    tangoApplication.m_videoOverlayUseTextureMethod = true;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = false;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = true;
+                    break;
+                case 4:
+                    tangoApplication.m_videoOverlayUseTextureMethod = false;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = true;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = true;
+                    break;
+                case 5:
+                    tangoApplication.m_videoOverlayUseTextureMethod = true;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = true;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = false;
+                    break;
+                case 6:
+                    tangoApplication.m_videoOverlayUseTextureMethod = true;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = true;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = true;
+                    break;
+                default:
+                    tangoApplication.m_videoOverlayUseTextureMethod = true;
+                    tangoApplication.m_videoOverlayUseYUVTextureIdMethod = false;
+                    tangoApplication.m_videoOverlayUseByteBufferMethod = false;
+                    break;
             }
 
             EditorGUI.indentLevel--;
         }
         else
         {
-            tangoApplication.m_videoOverlayUseTextureIdMethod = true;
+            tangoApplication.m_videoOverlayUseTextureMethod = true;
+            tangoApplication.m_videoOverlayUseYUVTextureIdMethod = false;
             tangoApplication.m_videoOverlayUseByteBufferMethod = false;
         }
 
@@ -222,8 +334,9 @@ public class TangoInspector : Editor
             if (tangoApplication.m_3drGenerateColor
                 && (!tangoApplication.m_enableVideoOverlay || !tangoApplication.m_videoOverlayUseByteBufferMethod))
             {
-                EditorGUILayout.HelpBox("Video Overlay must be enabled and set to \"Raw Bytes\" or \"Both\""
-                                        + " in order to use 3D Reconstruction with color.", MessageType.Warning);
+                EditorGUILayout.HelpBox("To use 3D reconstruction with color, you must enable Video Overlay and"
+                                        + " set it to \"Raw Bytes\", \"Texture and Raw Bytes\", or "
+                                        + " \"YUV Texture and Raw Bytes\".", MessageType.Warning);
             }
 
             tangoApplication.m_3drGenerateNormal = EditorGUILayout.Toggle(
@@ -232,8 +345,18 @@ public class TangoInspector : Editor
                 "Generate UVs", tangoApplication.m_3drGenerateTexCoord);
             tangoApplication.m_3drSpaceClearing = EditorGUILayout.Toggle(
                 "Space Clearing", tangoApplication.m_3drSpaceClearing);
+            tangoApplication.m_3drUpdateMethod = (Tango3DReconstruction.UpdateMethod)EditorGUILayout.EnumPopup(
+                "Update Method", tangoApplication.m_3drUpdateMethod);
+
+            string tooltip = "If non-zero, any mesh that has less than this number of vertices is assumed to be "
+                + "noise and will not be generated.";
+            int newMinNumVertices = EditorGUILayout.IntField(new GUIContent("Mesh Min Vertices", tooltip),
+                                                             tangoApplication.m_3drMinNumVertices);
+            tangoApplication.m_3drMinNumVertices = Mathf.Max(newMinNumVertices, 0);
+
             tangoApplication.m_3drUseAreaDescriptionPose = EditorGUILayout.Toggle(
                 "Use Area Description Pose", tangoApplication.m_3drUseAreaDescriptionPose);
+
             if (tangoApplication.m_3drUseAreaDescriptionPose && !tangoApplication.m_enableAreaDescriptions)
             {
                 EditorGUILayout.HelpBox("Area Descriptions must be enabled in order for "
@@ -243,7 +366,7 @@ public class TangoInspector : Editor
             {
                 EditorGUILayout.HelpBox("Area Descriptions are enabled, but \"Use Area Description Pose\" is disabled "
                                         + "for 3D Reconstruction.\n\nIf left as-is, 3D Reconstruction will use the Start of "
-                                        + "Service pose, even if an area description is loaded and/or area learning is enabled.", 
+                                        + "Service pose, even if an area description is loaded and/or area learning is enabled.",
                                         MessageType.Warning);
             }
 
@@ -251,6 +374,59 @@ public class TangoInspector : Editor
         }
 
         EditorGUILayout.Space();
+    }
+
+    /// <summary>
+    /// Draws options for performance management.
+    /// </summary>
+    /// <param name="tangoApplication">Tango application.</param>
+    private void _DrawPerformanceOptions(TangoApplication tangoApplication)
+    {
+        tangoApplication.m_showPerformanceOptionsInInspector =
+            EditorGUILayout.Foldout(tangoApplication.m_showPerformanceOptionsInInspector, "Performance Options");
+        
+        if (tangoApplication.m_showPerformanceOptionsInInspector)
+        {
+            EditorGUI.indentLevel++;
+
+            m_tangoApplication.m_initialPointCloudMaxPoints = EditorGUILayout.IntField(
+                new GUIContent("Point Cloud Max Points", 
+                           "Set an upper limit on the number of points in the point cloud. If value is 0, no limit is imposed."),
+                m_tangoApplication.m_initialPointCloudMaxPoints);
+
+            tangoApplication.m_keepScreenAwake = EditorGUILayout.Toggle("Keep Screen Awake", tangoApplication.m_keepScreenAwake);
+
+            tangoApplication.m_adjustScreenResolution = EditorGUILayout.Toggle(
+                new GUIContent("Reduce Resolution", 
+                           "Whether to adjust the size of the application's main render buffer for performance reasons"),
+                tangoApplication.m_adjustScreenResolution);
+
+            EditorGUI.indentLevel++;
+
+            GUI.enabled = tangoApplication.m_adjustScreenResolution;
+
+            tangoApplication.m_targetResolution = EditorGUILayout.IntField(
+                new GUIContent("Target Resolution", 
+                           "Target resolution to reduce resolution to when m_adjustScreenResolution is enabled."),
+                tangoApplication.m_targetResolution);
+
+            string oversizedResolutionTooltip = "If true, resolution adjustment will allow adjusting to a resolution " +
+                "larger than the display of the current device. This is generally discouraged.";
+            tangoApplication.m_allowOversizedScreenResolutions = EditorGUILayout.Toggle(
+                new GUIContent("Allow Oversized", oversizedResolutionTooltip), tangoApplication.m_allowOversizedScreenResolutions);
+
+            GUI.enabled = true;
+
+            if (!tangoApplication.m_adjustScreenResolution)
+            {
+                EditorGUILayout.HelpBox("Some Tango devices have very high-resolution displays.\n\n" +
+                                        "Consider limiting application resolution here or elsewhere in your application.", MessageType.Warning);
+            }
+
+            EditorGUI.indentLevel--;
+
+            EditorGUI.indentLevel--;
+        }
     }
 
     /// <summary>

@@ -27,6 +27,11 @@ using UnityEngine;
 public class MeshBuilderWithColorGUIController : MonoBehaviour
 {
     /// <summary>
+    /// If set, grid indices will stop meshing when they have been sufficiently observed.
+    /// </summary>
+    public bool m_enableSelectiveMeshing;
+
+    /// <summary>
     /// Debug info: If the mesh is being updated.
     /// </summary>
     private bool m_isEnabled = true;
@@ -41,6 +46,7 @@ public class MeshBuilderWithColorGUIController : MonoBehaviour
     {
         m_tangoApplication = FindObjectOfType<TangoApplication>();
         m_dynamicMesh = FindObjectOfType<TangoDynamicMesh>();
+        m_dynamicMesh.m_enableSelectiveMeshing = m_enableSelectiveMeshing;
     }
 
     /// <summary>
@@ -50,7 +56,10 @@ public class MeshBuilderWithColorGUIController : MonoBehaviour
     {
         if (Input.GetKey(KeyCode.Escape))
         {
-            Application.Quit();
+            // This is a fix for a lifecycle issue where calling
+            // Application.Quit() here, and restarting the application
+            // immediately results in a deadlocked app.
+            AndroidHelper.AndroidQuit();
         }
     }
 
@@ -72,5 +81,27 @@ public class MeshBuilderWithColorGUIController : MonoBehaviour
             m_isEnabled = !m_isEnabled;
             m_tangoApplication.Set3DReconstructionEnabled(m_isEnabled);
         }
+
+        if (GUI.Button(new Rect(Screen.width - 160, 220, 140, 80), "<size=30>Export</size>"))
+        {
+            string filepath = "/sdcard/DemoMesh.obj";
+            m_dynamicMesh.ExportMeshToObj(filepath);
+            Debug.Log(filepath);
+        }
+    }
+
+    /// <summary>
+    /// Called after the application gets paused or resumed.
+    /// </summary>
+    /// <param name="pauseStatus">
+    /// If set to <c>true</c> this is the pause event, otherwise this is the resume event.
+    /// </param>
+    public void OnApplicationPause(bool pauseStatus)
+    {
+        // Since motion tracking is lost when disconnected from Tango, any
+        // existing 3D reconstruction state no longer is lined up with the
+        // real world. Best we can do is clear the state.
+        m_dynamicMesh.Clear();
+        m_tangoApplication.Tango3DRClear();
     }
 }

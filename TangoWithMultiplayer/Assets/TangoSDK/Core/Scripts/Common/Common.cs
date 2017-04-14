@@ -36,12 +36,12 @@ namespace Tango
         /// <summary>
         /// Name of the Tango C-API library.
         /// </summary>
-        internal const string TANGO_UNITY_DLL = "tango_client_api";
+        internal const string TANGO_CLIENT_API_DLL = "tango_client_api";
 
         /// <summary>
-        /// Motion Tracking permission intent string.
+        /// Name of the Tango Unity library.
         /// </summary>
-        internal const string TANGO_MOTION_TRACKING_PERMISSIONS = "MOTION_TRACKING_PERMISSION";
+        internal const string TANGO_UNITY_DLL = "tango_unity_lib";
 
         /// <summary>
         /// ADF Load/Save permission intent string.
@@ -49,9 +49,9 @@ namespace Tango
         internal const string TANGO_ADF_LOAD_SAVE_PERMISSIONS = "ADF_LOAD_SAVE_PERMISSION";
 
         /// <summary>
-        /// Code used to identify the result came from the Motion Tracking permission request.
+        /// The Android camera permission string.
         /// </summary>
-        internal const int TANGO_MOTION_TRACKING_PERMISSIONS_REQUEST_CODE = 42;
+        internal const string ANDROID_CAMERA_PERMISSION = "android.permission.CAMERA";
 
         /// <summary>
         /// Code used to identify the result came from the ADF Load/Save permission request.
@@ -69,9 +69,14 @@ namespace Tango
         internal const int TANGO_ADF_EXPORT_REQUEST_CODE = 45;
 
         /// <summary>
+        /// Code used to identify the result came from requesting Android permissions.
+        /// </summary>
+        internal const int ANDROID_PERMISSION_REQUEST_CODE = 46;
+
+        /// <summary>
         /// Max number of vertices the Point Cloud supports.
         /// </summary>
-        internal const int UNITY_MAX_SUPPORTED_VERTS_PER_MESH = 65534;
+        internal const int MAX_NUM_POINTS = 65534;
 
         /// <summary>
         /// The length of an area description ID string.
@@ -79,7 +84,7 @@ namespace Tango
         internal const int UUID_LENGTH = 37;
 
         /// <summary>
-        /// Return values from Android actvities.
+        /// Return values from Android activities.
         /// </summary>
         public enum AndroidResult
         {

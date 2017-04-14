@@ -43,8 +43,8 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
 
     /// <summary>
     /// Toggle group for the Area Description list.
-    /// 
-    /// You can only select one Area Description at a time. To enforce this, every list element gets added to this 
+    ///
+    /// You can only select one Area Description at a time. To enforce this, every list element gets added to this
     /// toggle group.
     /// </summary>
     public ToggleGroup m_toggleGroup;
@@ -55,7 +55,7 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
     public void Start()
     {
         TangoApplication tangoApplication = FindObjectOfType<TangoApplication>();
-        
+
         if (tangoApplication != null)
         {
             tangoApplication.Register(this);
@@ -73,17 +73,20 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
         PhotonNetwork.ConnectUsingSettings("0.1");
 #endif
     }
-    
+
     /// <summary>
     /// Unity Update function.
-    /// 
+    ///
     /// Quit the application when the back button is clicked.
     /// </summary>
     public void Update()
     {
         if (Input.GetKey(KeyCode.Escape))
         {
-            Application.Quit();
+            // This is a fix for a lifecycle issue where calling
+            // Application.Quit() here, and restarting the application
+            // immediately results in a deadlocked app.
+            AndroidHelper.AndroidQuit();
         }
     }
 
@@ -100,7 +103,7 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
             {
                 PhotonNetwork.ConnectUsingSettings("0.1");
             }
-            
+
             if (PhotonNetwork.inRoom)
             {
                 PhotonNetwork.LeaveRoom();
@@ -112,14 +115,14 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
             Application.Quit();
         }
     }
-    
+
     /// <summary>
     /// This is called when succesfully connected to the Tango service.
     /// </summary>
     public void OnTangoServiceConnected()
     {
     }
-    
+
     /// <summary>
     /// This is called when disconnected from the Tango service.
     /// </summary>
@@ -177,7 +180,7 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
 
     /// <summary>
     /// Refresh the Area Description list's UI content.
-    /// 
+    ///
     /// This function updates the list's UI based on local Area Descriptions. It also hooks up a callback to each
     /// element to get notified when the selected Area Description changes.
     /// </summary>
@@ -188,6 +191,9 @@ public class AreaDescriptionPickerUIController : Photon.PunBehaviour, ITangoLife
             Destroy(t.gameObject);
         }
 
+#if UNITY_EDITOR
+        AreaDescription.GenerateEmulatedSavePath();
+#endif
         AreaDescription[] areaDescriptionList = AreaDescription.GetList();
 
         if (areaDescriptionList == null)

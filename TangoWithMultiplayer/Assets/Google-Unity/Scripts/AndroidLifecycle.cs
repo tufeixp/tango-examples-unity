@@ -25,6 +25,16 @@ using UnityEngine;
                                                          Justification = "Legacy support.")]
 
 /// <summary>
+/// Delegate for the Android onStart event.
+/// </summary>
+public delegate void OnStartEventHandler();
+
+/// <summary>
+/// Delegate for the Android onStop event.
+/// </summary>
+public delegate void OnStopEventHandler();
+
+/// <summary>
 /// Delegate for the Android onPause event.
 /// </summary>
 public delegate void OnPauseEventHandler();
@@ -43,10 +53,17 @@ public delegate void OnResumeEventHandler();
 public delegate void OnActivityResultEventHandler(int requestCode, int resultCode, AndroidJavaObject data);
 
 /// <summary>
-/// Delegate for the Android screen orientation changed.
+/// Delegate for the Android onRequestPermissionsResult event.
 /// </summary>
-/// <param name="newOrientation">The index of new orientation.</param>
-public delegate void OnScreenOrientationChangedEventHandler(AndroidScreenRotation newOrientation);
+/// <param name="requestCode">Request code.</param>
+/// <param name="permissions">Permissions requested.</param>
+/// <param name="grantResults">Grant result for each corresponding permission.</param>
+public delegate void OnRequestPermissionsResultHandler(int requestCode, string[] permissions, AndroidPermissionGrantResult[] grantResults);
+
+/// <summary>
+/// Delegate for the Android DisplayListener interface's onDisplayChanged event.
+/// </summary>
+public delegate void OnDisplayChangedEventHandler();
 
 /// <summary>
 /// Enum for native Android screen rotations.
@@ -60,14 +77,33 @@ public enum AndroidScreenRotation
 }
 
 /// <summary>
+/// Enum for the native Android permission grant result.
+/// </summary>
+public enum AndroidPermissionGrantResult
+{
+    GRANTED = 0,
+    DENIED = -1,
+}
+
+/// <summary>
 /// Binds callbacks directly to Android lifecycle.
 /// </summary>
-public class AndroidLifecycleCallbacks : AndroidJavaProxy 
+public class AndroidLifecycleCallbacks : AndroidJavaProxy
 {
     /// <summary>
     /// Occurs when the Android onPause event is fired.
     /// </summary>
-    private static OnPauseEventHandler m_onPuaseEvent;
+    private static OnStartEventHandler m_onStartEvent;
+
+    /// <summary>
+    /// Occurs when the Android onPause event is fired.
+    /// </summary>
+    private static OnStopEventHandler m_onStopEvent;
+
+    /// <summary>
+    /// Occurs when the Android onPause event is fired.
+    /// </summary>
+    private static OnPauseEventHandler m_onPauseEvent;
 
     /// <summary>
     /// Occurs when the Android onResume event is fired.
@@ -82,13 +118,42 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     /// <summary>
     /// Occurs when the Android screen orientation changed.
     /// </summary>
-    private static OnScreenOrientationChangedEventHandler m_onScreenOrientationChangedEvent;
+    private static OnDisplayChangedEventHandler m_onDisplayChangedEvent;
+
+    /// <summary>
+    /// Occurs when the Android onRequestPermissionsResult event is fired.
+    /// </summary>
+    private static OnRequestPermissionsResultHandler m_onRequestPermissionsResultEvent;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AndroidLifecycleCallbacks"/> class.
     /// </summary>
     public AndroidLifecycleCallbacks() : base("com.google.unity.GoogleUnityActivity$AndroidLifecycleListener")
     {
+    }
+
+    /// <summary>
+    /// Registers the on start callback to Android.
+    /// </summary>
+    /// <param name="onStart">On start.</param>
+    public void RegisterOnStart(OnStartEventHandler onStart)
+    {
+        if (onStart != null)
+        {
+            m_onStartEvent += onStart;
+        }
+    }
+
+    /// <summary>
+    /// Registers the on stop callback to Android.
+    /// </summary>
+    /// <param name="onStop">On stop.</param>
+    public void RegisterOnStop(OnStopEventHandler onStop)
+    {
+        if (onStop != null)
+        {
+            m_onStopEvent += onStop;
+        }
     }
 
     /// <summary>
@@ -99,7 +164,7 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     {
         if (onPause != null)
         {
-            m_onPuaseEvent += onPause;
+            m_onPauseEvent += onPause;
         }
     }
 
@@ -116,7 +181,7 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     }
 
     /// <summary>
-    /// Registers the on onActivityResult callback to Android.
+    /// Registers the onActivityResult callback to Android.
     /// </summary>
     /// <param name="onActivityResult">On activity result.</param>
     public void RegisterOnActivityResult(OnActivityResultEventHandler onActivityResult)
@@ -128,14 +193,50 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     }
 
     /// <summary>
-    /// Registers the callback to listen to screen orientation change.
+    /// Registers the callback to listen to display change.
     /// </summary>
-    /// <param name="onOrientationChanged">On screen orientation changed.</param>
-    public void RegisterOnScreenOrientationChanged(OnScreenOrientationChangedEventHandler onOrientationChanged)
+    /// <param name="onDisplayChanged">On display changed event.</param>
+    public void RegisterOnDisplayChanged(OnDisplayChangedEventHandler onDisplayChanged)
     {
-        if (onOrientationChanged != null)
+        if (onDisplayChanged != null)
         {
-            m_onScreenOrientationChangedEvent += onOrientationChanged;
+            m_onDisplayChangedEvent += onDisplayChanged;
+        }
+    }
+
+    /// <summary>
+    /// Registers the onRequestPermissionResult callback to Android.
+    /// </summary>
+    /// <param name="onRequestPermissionResult">On request permissions result.</param>
+    public void RegisterOnActivityResult(OnRequestPermissionsResultHandler onRequestPermissionResult)
+    {
+        if (onRequestPermissionResult != null)
+        {
+            m_onRequestPermissionsResultEvent += onRequestPermissionResult;
+        }
+    }
+
+    /// <summary>
+    /// Unregisters the on start callback to Android.
+    /// </summary>
+    /// <param name="onStart">On start.</param>
+    public void UnregisterOnStart(OnStartEventHandler onStart)
+    {
+        if (onStart != null)
+        {
+            m_onStartEvent -= onStart;
+        }
+    }
+
+    /// <summary>
+    /// Unregisters the on stop callback to Android.
+    /// </summary>
+    /// <param name="onStop">On stop.</param>
+    public void UnregisterOnStop(OnStopEventHandler onStop)
+    {
+        if (onStop != null)
+        {
+            m_onStopEvent -= onStop;
         }
     }
 
@@ -147,7 +248,7 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     {
         if (onPause != null)
         {
-            m_onPuaseEvent -= onPause;
+            m_onPauseEvent -= onPause;
         }
     }
 
@@ -164,7 +265,7 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     }
 
     /// <summary>
-    /// Unregisters the on onActivityResult callback to Android.
+    /// Unregisters the onActivityResult callback to Android.
     /// </summary>
     /// <param name="onActivityResult">On activity result.</param>
     public void UnregisterOnActivityResult(OnActivityResultEventHandler onActivityResult)
@@ -176,14 +277,81 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     }
 
     /// <summary>
-    /// Unregisters the on OnScreenOrientationChanged callback to Android.
+    /// Unregisters the OnDisplayChanged callback to Android.
     /// </summary>
-    /// <param name="onOrientationChanged">On screen orientation changed.</param>
-    public void UnregisterOnScreenOrientationChanged(OnScreenOrientationChangedEventHandler onOrientationChanged)
+    /// <param name="onDisplayChanged">On screen display changed.</param>
+    public void UnregisterOnDisplayChanged(OnDisplayChangedEventHandler onDisplayChanged)
     {
-        if (onOrientationChanged != null)
+        if (onDisplayChanged != null)
         {
-            m_onScreenOrientationChangedEvent -= onOrientationChanged;
+            m_onDisplayChangedEvent -= onDisplayChanged;
+        }
+    }
+
+    /// <summary>
+    /// Unregisters the onRequestPermissionResult callback to Android.
+    /// </summary>
+    /// <param name="onRequestPermissionsResult">On request permissions result.</param>
+    public void UnregisterOnRequestPermissionsResult(OnRequestPermissionsResultHandler onRequestPermissionsResult)
+    {
+        if (onRequestPermissionsResult != null)
+        {
+            m_onRequestPermissionsResultEvent -= onRequestPermissionsResult;
+        }
+    }
+
+    /// <summary>
+    /// Invoke the specified methodName and javaArgs.
+    /// </summary>
+    /// <returns>Return value to pass bath to Java.</returns>
+    /// <param name="methodName">Method name.</param>
+    /// <param name="javaArgs">Java arguments.</param>
+    public override AndroidJavaObject Invoke(string methodName, AndroidJavaObject[] javaArgs)
+    {
+        if (methodName == "onRequestPermissionsResult")
+        {
+            // As of this writing, Unity versions 5.2 and up do not properly marshal Arrays from
+            // Java to Unity when using the AndroidJavaProxy. Bypass that code to properly get the
+            // array from Java.
+            onRequestPermissionsResult(
+                javaArgs[0].Call<int>("intValue", new object[0]),
+                AndroidJNIHelper.ConvertFromJNIArray<string[]>(javaArgs[1].GetRawObject()),
+                AndroidJNIHelper.ConvertFromJNIArray<int[]>(javaArgs[2].GetRawObject()));
+            return null;
+        }
+        else
+        {
+            return base.Invoke(methodName, javaArgs);
+        }
+    }
+
+    /// <summary>
+    /// Implements the Android onStart.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.NamingRules",
+                                                     "SA1300:ElementMustBeginWithUpperCaseLetter",
+                                                     Justification = "Android API.")]
+    protected void onStart()
+    {
+        if (m_onStartEvent != null)
+        {
+            Debug.Log("Unity got the Java onStart");
+            m_onStartEvent();
+        }
+    }
+
+    /// <summary>
+    /// Implements the Android onStop.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.NamingRules",
+                                                     "SA1300:ElementMustBeginWithUpperCaseLetter",
+                                                     Justification = "Android API.")]
+    protected void onStop()
+    {
+        if (m_onStopEvent != null)
+        {
+            Debug.Log("Unity got the Java onStop");
+            m_onStopEvent();
         }
     }
 
@@ -195,10 +363,10 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
                                                      Justification = "Android API.")]
     protected void onPause()
     {
-        if (m_onPuaseEvent != null)
+        if (m_onPauseEvent != null)
         {
             Debug.Log("Unity got the Java onPause");
-            m_onPuaseEvent();
+            m_onPauseEvent();
         }
     }
 
@@ -230,23 +398,48 @@ public class AndroidLifecycleCallbacks : AndroidJavaProxy
     {
         if (m_onActivityResultEvent != null)
         {
-            Debug.Log("Unity got the Java onActivityResult");
+            Debug.Log("Unity got the Java onActivityResult, requestCode=" + requestCode);
             m_onActivityResultEvent(requestCode, resultCode, data);
         }
     }
 
     /// <summary>
-    /// Implements the onScreenRotationChanged.
+    /// Implements the onDisplayChanged.
     /// </summary>
-    /// <param name="newOrientation">New screen orientation.</param>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.NamingRules",
                                                      "SA1300:ElementMustBeginWithUpperCaseLetter",
                                                      Justification = "Android API.")]
-    protected void onScreenRotationChanged(AndroidScreenRotation newOrientation)
+    protected void onDisplayChanged()
     {
-        if (m_onScreenOrientationChangedEvent != null)
+        if (m_onDisplayChangedEvent != null)
         {
-            m_onScreenOrientationChangedEvent(newOrientation);
+            m_onDisplayChangedEvent();
+        }
+    }
+
+    /// <summary>
+    /// Implements the Android onRequestPermissionsResult.
+    /// </summary>
+    /// <param name="requestCode">Request code.</param>
+    /// <param name="permissions">Permissions requested.</param>
+    /// <param name="intResults">Grant result for each corresponding permission.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.NamingRules",
+                                                     "SA1300:ElementMustBeginWithUpperCaseLetter",
+                                                     Justification = "Android API.")]
+    protected void onRequestPermissionsResult(
+        int requestCode, string[] permissions, int[] intResults)
+    {
+        AndroidPermissionGrantResult[] grantResults
+            = new AndroidPermissionGrantResult[intResults.Length];
+        for (int it = 0; it < grantResults.Length; ++it)
+        {
+            grantResults[it] = (AndroidPermissionGrantResult)intResults[it];
+        }
+
+        if (m_onRequestPermissionsResultEvent != null)
+        {
+            Debug.Log("Unity got the Java onRequestPermissionsResult, requestCode=" + requestCode);
+            m_onRequestPermissionsResultEvent(requestCode, permissions, grantResults);
         }
     }
 }

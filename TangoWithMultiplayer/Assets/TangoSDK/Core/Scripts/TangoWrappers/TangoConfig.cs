@@ -17,6 +17,9 @@
 //
 // </copyright>
 //-----------------------------------------------------------------------
+[module: System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.DocumentationRules",
+    "SA1649:FileHeaderFileNameDocumentationMustMatchTypeName",
+    Justification = "Files can start with an interface.")]
 
 namespace Tango
 {
@@ -28,9 +31,33 @@ namespace Tango
     using UnityEngine;
 
     /// <summary>
+    /// API wrapper interface for Tango Configuration Parameters.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.DocumentationRules",
+        "SA1600:ElementsMustBeDocumented", Justification = "Interface for testing; methods documented on implementation.")]
+    internal interface ITangoConfig
+    {
+        bool SetBool(string key, bool value);
+
+        bool GetBool(string key, ref bool value);
+
+        bool SetInt32(string key, Int32 value);
+
+        bool GetInt32(string key, ref Int32 value);
+
+        bool SetString(string key, string value);
+
+        IntPtr GetHandle();
+
+        void SetRuntimeConfig();
+
+        void Dispose();
+    }
+
+    /// <summary>
     /// C API wrapper for Tango Configuration Parameters.
     /// </summary>
-    internal sealed class TangoConfig : IDisposable
+    internal sealed class TangoConfig : IDisposable, ITangoConfig
     {
         private const string m_ConfigErrorFormat = "{0}.{1}() Invalid TangoConfig, make sure Tango Config is initialized properly.";
         private static readonly string CLASS_NAME = "TangoConfig";
@@ -43,12 +70,12 @@ namespace Tango
 
         /// <summary>
         /// Create a new TangoConfig.
-        /// 
+        ///
         /// A TangoConfig is passed to TangoService_connect() which starts the service running with
         /// the parameters set at that time in that TangoConfig.  This function can be used to find the current
         /// configuration of the service (i.e. what would be run if no config is specified on TangoService_connect()),
-        /// or to create one of a few "template" TangoConfigs.
-        /// 
+        /// or to create one of a few "template" TangoConfig objects.
+        ///
         /// The class is needed only at the time of TangoService_connect() where it is used to configure the service
         /// and can safely be disposed after it has been used in TangoService_connect().
         /// </summary>
@@ -60,8 +87,8 @@ namespace Tango
 
         /// <summary>
         /// Delegate for internal API call that sets a config option.
-        /// 
-        /// This matches the signature of TangoConfig_setBool, TangoConfig_setDouble, etc. 
+        ///
+        /// This matches the signature of <c>TangoConfig_setBool</c>, <c>TangoConfig_setDouble</c>, etc.
         /// </summary>
         /// <typeparam name="T">Type of the value being set.</typeparam>
         /// <param name="configHandle">TangoConfig handle.</param>
@@ -75,8 +102,8 @@ namespace Tango
 
         /// <summary>
         /// Delegate for internal API call that gets a config option.
-        /// 
-        /// This matches the signature of TangoConfig_getBool, TangoConfig_getDouble, etc. 
+        ///
+        /// This matches the signature of <c>TangoConfig_getBool</c>, <c>TangoConfig_getDouble</c>, etc.
         /// </summary>
         /// <typeparam name="T">Type of the value being retrieved.</typeparam>
         /// <param name="configHandle">TangoConfig handle.</param>
@@ -87,6 +114,17 @@ namespace Tango
         /// not be set.
         /// </returns>
         private delegate int ConfigAPIGetter<T>(IntPtr configHandle, string key, ref T val);
+
+        /// <summary>
+        /// Values for the DEPTH_MODE config option.
+        /// </summary>
+        internal enum DepthMode
+        {
+            /// <summary>
+            /// PointCloud mode.
+            /// </summary>
+            XYZC = 0
+        }
 
         /// <summary>
         /// Releases all resource used by the <see cref="Tango.TangoConfig"/> object.
@@ -111,31 +149,62 @@ namespace Tango
         }
 
         /// <summary>
-        /// Gets a string of key-value pairs of all the configuration values of TangoService.
-        /// 
-        /// The string is separated into lines such that each line is one key-value pair, with format "key=value\n".  
-        /// Note that many of these config values are read-only, unless otherwise documented.
-        /// </summary>
-        /// <returns>String representation of the cached configuration.</returns>
-        internal string GetSettings()
-        {
-            if (m_configHandle != IntPtr.Zero)
-            {
-                return TangoConfigAPI.TangoConfig_toString(m_configHandle);
-            } 
-            else
-            {
-                return NO_CONFIG_FOUND;
-            }
-        }
-
-        /// <summary>
         /// Get the internal handle for this TangoConfig.
         /// </summary>
         /// <returns>The handle.</returns>
-        internal IntPtr GetHandle()
+        [PublicForTesting]
+        public IntPtr GetHandle()
         {
             return m_configHandle;
+        }
+
+        /// <summary>
+        /// Set a string configuration parameter.
+        /// </summary>
+        /// <returns><c>true</c> on success, <c>false</c> otherwise.</returns>
+        /// <param name="key">The string key value of the configuration parameter to set.</param>
+        /// <param name="value">The value to set the configuration key to.</param>
+        [PublicForTesting]
+        public bool SetString(string key, string value)
+        {
+            return _ConfigHelperSet(new ConfigAPISetter<string>(TangoConfigAPI.TangoConfig_setString), key, value, "SetString");
+        }
+
+        /// <summary>
+        /// Get a boolean configuration parameter.
+        /// </summary>
+        /// <returns><c>true</c>, if the value was retrieved, <c>false</c> otherwise.</returns>
+        /// <param name="key">The string key value of the configuration parameter to get.</param>
+        /// <param name="value">On successful return, the value of the configuration key.</param>
+        [PublicForTesting]
+        public bool GetBool(string key, ref bool value)
+        {
+            return _ConfigHelperGet(new ConfigAPIGetter<bool>(TangoConfigAPI.TangoConfig_getBool), key, ref value, "GetBool");
+        }
+
+        /// <summary>
+        /// Get an <c>Int32</c> configuration parameter.
+        /// </summary>
+        /// <returns><c>true</c>, if the value was retrieved, <c>false</c> otherwise.</returns>
+        /// <param name="key">The string key value of the configuration parameter to get.</param>
+        /// <param name="value">On successful return, the value of the configuration key.</param>
+        [PublicForTesting]
+        public bool GetInt32(string key, ref Int32 value)
+        {
+            return _ConfigHelperGet(new ConfigAPIGetter<Int32>(TangoConfigAPI.TangoConfig_getInt32), key, ref value, "GetInt32");
+        }
+
+        /// <summary>
+        /// Set this config as the current runtime config.
+        /// </summary>
+        [PublicForTesting]
+        public void SetRuntimeConfig()
+        {
+            bool wasSuccess = TangoConfigAPI.TangoService_setRuntimeConfig(m_configHandle) == Common.ErrorType.TANGO_SUCCESS;
+            if (!wasSuccess)
+            {
+                Debug.Log(string.Format("{0}.SetRuntimeConfig() Unable to set runtime config.", CLASS_NAME));
+            }
         }
 
         /// <summary>
@@ -144,24 +213,45 @@ namespace Tango
         /// <returns><c>true</c> on success, <c>false</c> otherwise.</returns>
         /// <param name="key">The string key value of the configuration parameter to set.</param>
         /// <param name="value">The value to set the configuration key to.</param>
-        internal bool SetBool(string key, bool value)
+        [PublicForTesting]
+        public bool SetBool(string key, bool value)
         {
             return _ConfigHelperSet(new ConfigAPISetter<bool>(TangoConfigAPI.TangoConfig_setBool), key, value, "SetBool");
         }
 
         /// <summary>
-        /// Set an Int32 configuration parameter.
+        /// Set an <c>Int32</c> configuration parameter.
         /// </summary>
         /// <returns><c>true</c> on success, <c>false</c> otherwise.</returns>
         /// <param name="key">The string key value of the configuration parameter to set.</param>
         /// <param name="value">The value to set the configuration key to.</param>
-        internal bool SetInt32(string key, Int32 value)
+        [PublicForTesting]
+        public bool SetInt32(string key, Int32 value)
         {
             return _ConfigHelperSet(new ConfigAPISetter<Int32>(TangoConfigAPI.TangoConfig_setInt32), key, value, "SetInt32");
         }
 
         /// <summary>
-        /// Set an Int64 configuration parameter.
+        /// Gets a string of key-value pairs of all the configuration values of TangoService.
+        ///
+        /// The string is separated into lines such that each line is one key-value pair, with format "key=value\n".
+        /// Note that many of these config values are read-only, unless otherwise documented.
+        /// </summary>
+        /// <returns>String representation of the cached configuration.</returns>
+        internal string GetSettings()
+        {
+            if (m_configHandle != IntPtr.Zero)
+            {
+                return TangoConfigAPI.TangoConfig_toString(m_configHandle);
+            }
+            else
+            {
+                return NO_CONFIG_FOUND;
+            }
+        }
+
+        /// <summary>
+        /// Set an <c>Int64</c> configuration parameter.
         /// </summary>
         /// <returns><c>true</c> on success, <c>false</c> otherwise.</returns>
         /// <param name="key">The string key value of the configuration parameter to set.</param>
@@ -183,40 +273,7 @@ namespace Tango
         }
 
         /// <summary>
-        /// Set a string configuration parameter.
-        /// </summary>
-        /// <returns><c>true</c> on success, <c>false</c> otherwise.</returns>
-        /// <param name="key">The string key value of the configuration parameter to set.</param>
-        /// <param name="value">The value to set the configuration key to.</param>
-        internal bool SetString(string key, string value)
-        {
-            return _ConfigHelperSet(new ConfigAPISetter<string>(TangoConfigAPI.TangoConfig_setString), key, value, "SetString");
-        }
-
-        /// <summary>
-        /// Get a boolean configuration parameter.
-        /// </summary>
-        /// <returns><c>true</c>, if the value was retrieved, <c>false</c> otherwise.</returns>
-        /// <param name="key">The string key value of the configuration parameter to get.</param>
-        /// <param name="value">On successful return, the value of the configuration key.</param>
-        internal bool GetBool(string key, ref bool value)
-        {
-            return _ConfigHelperGet(new ConfigAPIGetter<bool>(TangoConfigAPI.TangoConfig_getBool), key, ref value, "GetBool");
-        }
-
-        /// <summary>
-        /// Get an Int32 configuration parameter.
-        /// </summary>
-        /// <returns><c>true</c>, if the value was retrieved, <c>false</c> otherwise.</returns>
-        /// <param name="key">The string key value of the configuration parameter to get.</param>
-        /// <param name="value">On successful return, the value of the configuration key.</param>
-        internal bool GetInt32(string key, ref Int32 value)
-        {
-            return _ConfigHelperGet(new ConfigAPIGetter<Int32>(TangoConfigAPI.TangoConfig_getInt32), key, ref value, "GetInt32");
-        }
-
-        /// <summary>
-        /// Get an Int64 configuration parameter.
+        /// Get an <c>Int64</c> configuration parameter.
         /// </summary>
         /// <returns><c>true</c>, if the value was retrieved, <c>false</c> otherwise.</returns>
         /// <param name="key">The string key value of the configuration parameter to get.</param>
@@ -253,7 +310,7 @@ namespace Tango
                 Debug.Log(string.Format(m_ConfigErrorFormat, CLASS_NAME, tangoMethodName));
                 return false;
             }
-            
+
             bool wasSuccess = false;
             StringBuilder stringBuilder = new StringBuilder(512);
             wasSuccess = TangoConfigAPI.TangoConfig_getString(m_configHandle, key, stringBuilder, (uint)stringBuilder.Capacity) == Common.ErrorType.TANGO_SUCCESS;
@@ -264,18 +321,6 @@ namespace Tango
             }
 
             return wasSuccess;
-        }
-
-        /// <summary>
-        /// Set this config as the current runtime config.
-        /// </summary>
-        internal void SetRuntimeConfig()
-        {
-            bool wasSuccess = TangoConfigAPI.TangoService_setRuntimeConfig(m_configHandle) == Common.ErrorType.TANGO_SUCCESS;
-            if (!wasSuccess)
-            {
-                Debug.Log(string.Format("{0}.SetRuntimeConfig() Unable to set runtime config.", CLASS_NAME));
-            }
         }
 
         /// <summary>
@@ -314,7 +359,7 @@ namespace Tango
         /// Helper method for getting a configuration parameter.
         /// </summary>
         /// <returns><c>true</c>, if the API call returned success, <c>false</c> otherwise.</returns>
-        /// <param name="apiCall">The API call to perfom.</param>
+        /// <param name="apiCall">The API call to perform.</param>
         /// <param name="key">The key of the configuration parameter to get.</param>
         /// <param name="value">On success, this is filled with the value of the configuration parameter.</param>
         /// <param name="tangoMethodName">Name of the calling method. Used for logging purposes.</param>
@@ -343,23 +388,28 @@ namespace Tango
         internal struct Keys
         {
             // Motion Tracking
-            public static readonly string ENABLE_MOTION_TRACKING_BOOL = "config_enable_motion_tracking";
-            public static readonly string ENABLE_MOTION_TRACKING_AUTO_RECOVERY_BOOL = "config_enable_auto_recovery";
-            public static readonly string ENABLE_LOW_LATENCY_IMU_INTEGRATION = "config_enable_low_latency_imu_integration";
+            public const string ENABLE_MOTION_TRACKING_BOOL = "config_enable_motion_tracking";
+            public const string ENABLE_MOTION_TRACKING_AUTO_RECOVERY_BOOL = "config_enable_auto_recovery";
+            public const string ENABLE_LOW_LATENCY_IMU_INTEGRATION = "config_enable_low_latency_imu_integration";
 
             // Area Learning
-            public static readonly string ENABLE_AREA_LEARNING_BOOL = "config_enable_learning_mode";
-            public static readonly string LOAD_AREA_DESCRIPTION_UUID_STRING = "config_load_area_description_UUID";
+            public const string ENABLE_AREA_LEARNING_BOOL = "config_enable_learning_mode";
+            public const string LOAD_AREA_DESCRIPTION_UUID_STRING = "config_load_area_description_UUID";
+            public const string ENABLE_CLOUD_ADF_BOOL = "config_experimental_use_cloud_adf";
+
+            // Experimental COM
+            public const string EXPERIMENTAL_ENABLE_DRIFT_CORRECTION_BOOL = "config_enable_drift_correction";
 
             // Depth Perception
-            public static readonly string ENABLE_DEPTH_PERCEPTION_BOOL = "config_enable_depth";
+            public const string ENABLE_DEPTH_PERCEPTION_BOOL = "config_enable_depth";
+            public const string DEPTH_MODE = "config_depth_mode";
 
             // Video overlay
-            public static readonly string ENABLE_COLOR_CAMERA_BOOL = "config_enable_color_camera";
-            public static readonly string EXPERIMENTAL_Y_TEXTURE_HEIGHT = "experimental_color_y_tex_data_height";
-            public static readonly string EXPERIMENTAL_Y_TEXTURE_WIDTH = "experimental_color_y_tex_data_width";
-            public static readonly string EXPERIMENTAL_UV_TEXTURE_HEIGHT = "experimental_color_uv_tex_data_height";
-            public static readonly string EXPERIMENTAL_UV_TEXTURE_WIDTH = "experimental_color_uv_tex_data_width";
+            public const string ENABLE_COLOR_CAMERA_BOOL = "config_enable_color_camera";
+            public const string EXPERIMENTAL_Y_TEXTURE_HEIGHT = "experimental_color_y_tex_data_height";
+            public const string EXPERIMENTAL_Y_TEXTURE_WIDTH = "experimental_color_y_tex_data_width";
+            public const string EXPERIMENTAL_UV_TEXTURE_HEIGHT = "experimental_color_uv_tex_data_height";
+            public const string EXPERIMENTAL_UV_TEXTURE_WIDTH = "experimental_color_uv_tex_data_width";
 
             // Utility
             public static readonly string ENABLE_DATASET_RECORDING = "config_enable_dataset_recording";
@@ -375,66 +425,66 @@ namespace Tango
         private struct TangoConfigAPI
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern void TangoConfig_free(IntPtr tangoConfig);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern string TangoConfig_toString(IntPtr tangoConfig);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_setBool(IntPtr tangoConfig,
                                                          [MarshalAs(UnmanagedType.LPStr)] string key,
                                                          bool value);
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern IntPtr TangoService_getConfig(TangoEnums.TangoConfigType config_type);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_setInt32(IntPtr tangoConfig,
                                                           [MarshalAs(UnmanagedType.LPStr)] string key,
                                                           Int32 value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_setInt64(IntPtr tangoConfig,
                                                           [MarshalAs(UnmanagedType.LPStr)] string key,
                                                           Int64 value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_setDouble(IntPtr tangoConfig,
                                                            [MarshalAs(UnmanagedType.LPStr)] string key,
                                                            double value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_setString(IntPtr tangoConfig,
                                                            [MarshalAs(UnmanagedType.LPStr)] string key,
                                                            [MarshalAs(UnmanagedType.LPStr)] string value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_getBool(IntPtr tangoConfig,
                                                          [MarshalAs(UnmanagedType.LPStr)] string key,
                                                          ref bool value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_getInt32(IntPtr tangoConfig,
                                                           [MarshalAs(UnmanagedType.LPStr)] string key,
                                                           ref Int32 value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_getInt64(IntPtr tangoConfig,
                                                           [MarshalAs(UnmanagedType.LPStr)] string key,
                                                           ref Int64 value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_getDouble(IntPtr tangoConfig,
                                                            [MarshalAs(UnmanagedType.LPStr)] string key,
                                                            ref double value);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoConfig_getString(IntPtr tangoConfig,
                                                            [MarshalAs(UnmanagedType.LPStr)] string key,
                                                            [In, Out] StringBuilder value,
                                                            UInt32 size);
 
-            [DllImport(Common.TANGO_UNITY_DLL)]
+            [DllImport(Common.TANGO_CLIENT_API_DLL)]
             public static extern int TangoService_setRuntimeConfig(IntPtr tangoConfig);
 #else
             public static void TangoConfig_free(IntPtr tangoConfig)

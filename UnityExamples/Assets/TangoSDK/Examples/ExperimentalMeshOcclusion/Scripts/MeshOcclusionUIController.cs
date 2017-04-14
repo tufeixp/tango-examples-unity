@@ -18,6 +18,7 @@
 // </copyright>
 //-----------------------------------------------------------------------
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Xml;
@@ -147,7 +148,7 @@ public class MeshOcclusionUIController : MonoBehaviour, ITangoLifecycle, ITangoP
     /// <summary>
     /// If the interaction is initialized.
     /// 
-    /// Note that the initilization is triggered by the relocalization event. We don't want user to place object before
+    /// Note that the initialization is triggered by the relocalization event. We don't want user to place object before
     /// the device is relocalized.
     /// </summary>
     private bool m_initialized = false;
@@ -210,7 +211,10 @@ public class MeshOcclusionUIController : MonoBehaviour, ITangoLifecycle, ITangoP
         {
             if (m_menuOpen)
             {
-                Application.Quit();
+                // This is a fix for a lifecycle issue where calling
+                // Application.Quit() here, and restarting the application
+                // immediately results in a deadlocked app.
+                AndroidHelper.AndroidQuit();
             }
             else
             {
@@ -268,7 +272,7 @@ public class MeshOcclusionUIController : MonoBehaviour, ITangoLifecycle, ITangoP
     }
     
     /// <summary>
-    /// This is called when succesfully connected to the Tango service.
+    /// This is called when successfully connected to the Tango service.
     /// </summary>
     public void OnTangoServiceConnected()
     {
@@ -631,68 +635,30 @@ public class MeshOcclusionUIController : MonoBehaviour, ITangoLifecycle, ITangoP
     /// Process the mesh in 3 steps.
     /// 1. Extract the whole mesh from tango 3D Reconstruction.
     /// 2. Convert to a serializable format.
-    /// 3. Serialize with xml on sdcard.
+    /// 3. Serialize with XML on to the SD card.
     /// </summary>
-    /// <returns>The coroutine Ienumerator.</returns>
+    /// <returns>The coroutine IEnumerator.</returns>
     private IEnumerator _DoSaveTangoDynamicMesh()
     {
         m_savingText.gameObject.SetActive(true);
         m_savingText.text = "Extracting Whole Mesh...";
 
-        Tango3DReconstruction.Status status = Tango3DReconstruction.Status.INVALID;
-        bool needsToGrow = false;
-        float growthFactor = 1.5f;
-
         // Each list is filled out with values from extracting the whole mesh.
-        Vector3[] vertices = new Vector3[100];
-        int[] triangles = new int[99];
+        List<Vector3> vertices = new List<Vector3>();
+        List<int> triangles = new List<int>();
 
-        while (status != Tango3DReconstruction.Status.SUCCESS)
+        Tango3DReconstruction.Status status = m_tangoApplication.Tango3DRExtractWholeMesh(vertices, null, null, triangles);
+        if (status != Tango3DReconstruction.Status.SUCCESS)
         {
-            yield return null;
-
-            // Last frame the mesh needed more space.  Give it more room now.
-            if (needsToGrow)
-            {
-                int newVertexSize = (int)(vertices.Length * growthFactor);
-                int newTriangleSize = (int)(triangles.Length * growthFactor);
-                newTriangleSize -= newTriangleSize % 3;
-                
-                vertices = new Vector3[newVertexSize];
-                triangles = new int[newTriangleSize];
-                needsToGrow = false;
-            }
-
-            int numVertices;
-            int numTriangles;
-
-            status = m_tangoApplication.Tango3DRExtractWholeMesh(vertices, null, null, triangles, out numVertices, out numTriangles);
-
-            if (status != Tango3DReconstruction.Status.INSUFFICIENT_SPACE
-                && status != Tango3DReconstruction.Status.SUCCESS)
-            {
-                Debug.Log("Tango3DRExtractWholeMesh failed, status code = " + status);
-                break;
-            }
-            else if (status == Tango3DReconstruction.Status.INSUFFICIENT_SPACE)
-            {
-                // After exceeding allocated space for vertices and triangles, continue extraction next frame.
-                Debug.Log(string.Format("Tango3DRExtractWholeMesh ran out of space with room for {0} vertexes, {1} indexes.", vertices.Length, triangles.Length));
-                needsToGrow = true;
-            }
-
-            // Make any leftover triangles degenerate.
-            for (int triangleIt = numTriangles * 3; triangleIt < triangles.Length; ++triangleIt)
-            {
-                triangles[triangleIt] = 0;
-            }
+            Debug.Log("Tango3DRExtractWholeMesh failed, status code = " + status);
+            yield break;
         }
 
         Debug.Log("Tango3DRExtractWholeMesh finished");
 
         Mesh extractedMesh = new Mesh();
-        extractedMesh.vertices = vertices;
-        extractedMesh.triangles = triangles;
+        extractedMesh.vertices = vertices.ToArray();
+        extractedMesh.triangles = triangles.ToArray();
 
         // Save the generated unity mesh.
         m_savingText.text = "Saving Area Description Mesh...";

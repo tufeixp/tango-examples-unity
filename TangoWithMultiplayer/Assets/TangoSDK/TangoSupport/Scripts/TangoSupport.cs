@@ -33,19 +33,9 @@ namespace Tango
     public static class TangoSupport
     {
         /// <summary>
-        /// Name of the Tango Support C API shared library.
-        /// </summary>
-        internal const string TANGO_SUPPORT_UNITY_DLL = "tango_support_api";
-
-        /// <summary>
-        /// Class name for debug logging.
-        /// </summary>
-        private const string CLASS_NAME = "TangoSupport";
-
-        /// <summary>
         /// Matrix that transforms from Start of Service to the Unity World.
         /// </summary>
-        private static readonly Matrix4x4 UNITY_WORLD_T_START_SERVICE = new Matrix4x4
+        public static readonly Matrix4x4 UNITY_WORLD_T_START_SERVICE = new Matrix4x4
         {
             m00 = 1.0f, m01 = 0.0f, m02 = 0.0f, m03 = 0.0f,
             m10 = 0.0f, m11 = 0.0f, m12 = 1.0f, m13 = 0.0f,
@@ -58,13 +48,41 @@ namespace Tango
         /// </summary>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("StyleCop.CSharp.SpacingRules", "*",
                                                          Justification = "Matrix visibility is more important.")]
-        private static readonly Matrix4x4 DEVICE_T_UNITY_CAMERA = new Matrix4x4
+        public static readonly Matrix4x4 DEVICE_T_UNITY_CAMERA = new Matrix4x4
         {
             m00 = 1.0f, m01 = 0.0f, m02 =  0.0f, m03 = 0.0f,
             m10 = 0.0f, m11 = 1.0f, m12 =  0.0f, m13 = 0.0f,
             m20 = 0.0f, m21 = 0.0f, m22 = -1.0f, m23 = 0.0f,
             m30 = 0.0f, m31 = 0.0f, m32 =  0.0f, m33 = 1.0f
         };
+
+        public static readonly Matrix4x4 COLOR_CAMERA_T_UNITY_CAMERA = new Matrix4x4
+        {
+            m00 = 1.0f, m01 = 0.0f, m02 = 0.0f, m03 = 0.0f,
+            m10 = 0.0f, m11 = -1.0f, m12 = 0.0f, m13 = 0.0f,
+            m20 = 0.0f, m21 = 0.0f, m22 = 1.0f, m23 = 0.0f,
+            m30 = 0.0f, m31 = 0.0f, m32 = 0.0f, m33 = 1.0f
+        };
+
+        /// <summary>
+        /// The rotation matrix need to be applied when using color camera's pose.
+        /// </summary>
+        public static Matrix4x4 m_colorCameraPoseRotation = Matrix4x4.identity;
+
+        /// <summary>
+        /// The rotation matrix need to be applied when using device pose.
+        /// </summary>
+        public static Matrix4x4 m_devicePoseRotation = Matrix4x4.identity;
+
+        /// <summary>
+        /// Name of the Tango Support C API shared library.
+        /// </summary>
+        internal const string TANGO_SUPPORT_UNITY_DLL = "tango_support_api";
+
+        /// <summary>
+        /// Class name for debug logging.
+        /// </summary>
+        private const string CLASS_NAME = "TangoSupport";
 
         /// <summary>
         /// Matrix that transforms for device screen rotation of 270 degrees.
@@ -106,31 +124,66 @@ namespace Tango
         };
 
         /// <summary>
-        /// The reference to the current screen rotation matrix.
+        /// Compute a rotation from rotation a to rotation b, in form of the OrientationManager.Rotation enum.
         /// </summary>
-        private static Matrix4x4 m_rotationTDefault = Matrix4x4.identity;
+        /// <param name="b">Target rotation frame.</param>
+        /// <param name="a">Start rotation frame.</param>
+        /// <returns>The orientation index that follows Android screen rotation standard.</returns>
+        public static Tango.OrientationManager.Rotation RotateFromAToB(Tango.OrientationManager.Rotation b,
+                                                                       Tango.OrientationManager.Rotation a)
+        {
+            int ret = (int)b - (int)a;
+            if (ret < 0)
+            {
+                ret += 4;
+            }
+
+            return (Tango.OrientationManager.Rotation)(ret % 4);
+        }
 
         /// <summary>
-        /// Update current rotation index.
-        /// 
-        /// This function will make a query from native Android and decide what is the current screen orientation.
+        /// Update current additional rotation matrix based on the display orientation and color camera orientation.
+        ///
+        /// Not that m_colorCameraPoseRotation will need to compensate the rotation with physical color camera.
         /// </summary>
-        public static void UpdateCurrentRotationIndex()
+        /// <param name="displayRotation">Orientation of current activity. Index enum is same same as Android screen
+        /// orientation standard.</param>
+        /// <param name="colorCameraRotation">Orientation of current color camera sensor. Index enum is same as Android
+        /// camera orientation standard.</param>
+        public static void UpdatePoseMatrixFromDeviceRotation(OrientationManager.Rotation displayRotation,
+                                                              OrientationManager.Rotation colorCameraRotation)
         {
-            int index = AndroidHelper.GetScreenOrientation();
-            switch (index)
+            Tango.OrientationManager.Rotation r = RotateFromAToB(displayRotation, colorCameraRotation);
+
+            switch (r)
             {
-            case 1:
-                m_rotationTDefault = ROTATION90_T_DEFAULT;
+            case Tango.OrientationManager.Rotation.ROTATION_90:
+                m_colorCameraPoseRotation = ROTATION90_T_DEFAULT;
                 break;
-            case 2:
-                m_rotationTDefault = ROTATION180_T_DEFAULT;
+            case Tango.OrientationManager.Rotation.ROTATION_180:
+                m_colorCameraPoseRotation = ROTATION180_T_DEFAULT;
                 break;
-            case 3:
-                m_rotationTDefault = ROTATION270_T_DEFAULT;
+            case Tango.OrientationManager.Rotation.ROTATION_270:
+                m_colorCameraPoseRotation = ROTATION270_T_DEFAULT;
                 break;
             default:
-                m_rotationTDefault = Matrix4x4.identity;
+                m_colorCameraPoseRotation = Matrix4x4.identity;
+                break;
+            }
+
+            switch (displayRotation)
+            {
+            case Tango.OrientationManager.Rotation.ROTATION_90:
+                m_devicePoseRotation = ROTATION90_T_DEFAULT;
+                break;
+            case Tango.OrientationManager.Rotation.ROTATION_180:
+                m_devicePoseRotation = ROTATION180_T_DEFAULT;
+                break;
+            case Tango.OrientationManager.Rotation.ROTATION_270:
+                m_devicePoseRotation = ROTATION270_T_DEFAULT;
+                break;
+            default:
+                m_devicePoseRotation = Matrix4x4.identity;
                 break;
             }
         }
@@ -138,7 +191,7 @@ namespace Tango
         /// <summary>
         /// Fits a plane to a point cloud near a user-specified location. This
         /// occurs in two passes. First, all points in cloud within
-        /// maxPixelDistance to uvCoordinates after projection are kept. Then a
+        /// <c>maxPixelDistance</c> to <c>uvCoordinates</c> after projection are kept. Then a
         /// plane is fit to the subset cloud using RANSAC. After the initial fit
         /// all inliers from the original cloud are used to refine the plane
         /// model.
@@ -194,7 +247,7 @@ namespace Tango
             DVector3 doubleIntersectionPoint = new DVector3();
             double[] planeArray = new double[4];
 
-            int returnValue = TangoSupportAPI.TangoSupport_fitPlaneModelNearClickMatrixTransform(
+            int returnValue = TangoSupportAPI.TangoSupport_fitPlaneModelNearPointMatrixTransform(
                 pointCloudXyzIj, cameraIntrinsics, ref doubleMatrix,
                 ref uvCoordinatesTango,
                 out doubleIntersectionPoint, planeArray);
@@ -478,7 +531,7 @@ namespace Tango
             Matrix4x4 unityWorldTUnityCamera = UNITY_WORLD_T_START_SERVICE *
                                                startServiceTDevice *
                                                DEVICE_T_UNITY_CAMERA *
-                                               m_rotationTDefault;
+                                               m_devicePoseRotation;
 
             // Extract final position, rotation.
             position = unityWorldTUnityCamera.GetColumn(3);
@@ -712,7 +765,7 @@ namespace Tango
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
             [DllImport(TANGO_SUPPORT_UNITY_DLL)]
-            public static extern int TangoSupport_fitPlaneModelNearClickMatrixTransform(
+            public static extern int TangoSupport_fitPlaneModelNearPointMatrixTransform(
                 TangoXYZij pointCloud, TangoCameraIntrinsics cameraIntrinsics,
                 ref DMatrix4x4 matrix, ref Vector2 uvCoordinates,
                 out DVector3 intersectionPoint,
@@ -732,7 +785,7 @@ namespace Tango
                 out Vector3 colorCameraPoint,
                 [Out, MarshalAs(UnmanagedType.I4)] out int isValidPoint);
 #else
-            public static int TangoSupport_fitPlaneModelNearClickMatrixTransform(
+            public static int TangoSupport_fitPlaneModelNearPointMatrixTransform(
                 TangoXYZij pointCloud, TangoCameraIntrinsics cameraIntrinsics,
                 ref DMatrix4x4 matrix, ref Vector2 uvCoordinates,
                 out DVector3 intersectionPoint, double[] planeModel)

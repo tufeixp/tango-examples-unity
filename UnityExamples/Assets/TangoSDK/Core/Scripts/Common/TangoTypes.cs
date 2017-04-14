@@ -1,4 +1,4 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="TangoTypes.cs" company="Google">
 //
 // Copyright 2016 Google Inc. All Rights Reserved.
@@ -67,7 +67,159 @@ namespace Tango
     }
 
     /// <summary>
-    /// The TangoXYZij struct contains information returned from the depth sensor.
+    /// Variant of <c>TangoPointCloudData</c> that has no extra processing done on it.  Instead of having arrays, it has
+    /// raw <c>IntPtr</c> fields.
+    /// 
+    /// This is the exact struct that the C Tango API provides.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TangoPointCloudIntPtr
+    {
+        /// <summary>
+        /// An integer denoting the version of the structure.
+        /// </summary>
+        public Int32 m_version;
+
+        /// <summary>
+        /// Time of capture of the point cloud (in seconds).
+        /// </summary>
+        public Double m_timestamp;
+
+        /// <summary>
+        /// The number of points in <c>points</c>.
+        /// </summary>
+        public Int32 m_numPoints;
+
+        /// <summary>
+        /// An array of XYZ,C float values.  XYZ is a coordinate in meters.  C is a confidence value in the range 
+        /// [0, 1], where 1 corresponds to full confidence.
+        /// </summary>
+        public IntPtr m_points;
+    }
+    
+     /// <summary>
+    /// Three element vector with doubles - used only to pass data between native and managed without allocations.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TangoTranslation
+    {
+        [MarshalAs(UnmanagedType.R8)]
+        public double x;
+        [MarshalAs(UnmanagedType.R8)]
+        public double y;
+        [MarshalAs(UnmanagedType.R8)]
+        public double z;
+
+        /// <summary>
+        /// Get or set x,y,z components (double) as 0,1,2 - other values throw an IndexOutOfRange exception.
+        /// </summary>
+        /// <param name="index">Set a component of the vector by int index.</param>
+        /// <returns>
+        /// Get a <see cref="System.Double"/> in the vector.
+        /// </returns>
+        public double this[int index]
+        {
+            get
+            {
+                switch (index)
+                {
+                    case 0:
+                        return x;
+                    case 1:
+                        return y;
+                    case 2:
+                        return z;
+                    default:
+                        throw new System.IndexOutOfRangeException();
+                }
+            }
+          
+            set
+            {
+                switch (index)
+                {
+                    case 0:
+                        x = value;
+                        return;
+                    case 1:
+                        y = value;
+                        return;
+                    case 2:
+                        z = value;
+                        return;
+                    default:
+                        throw new System.IndexOutOfRangeException();
+                }
+            }
+        }
+    }
+  
+    /// <summary>
+    /// Four element vector with doubles - used only to pass data between native and managed without allocations.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TangoOrientation
+    {
+        [MarshalAs(UnmanagedType.R8)]
+        public double x;
+        [MarshalAs(UnmanagedType.R8)]
+        public double y;
+        [MarshalAs(UnmanagedType.R8)]
+        public double z;
+        [MarshalAs(UnmanagedType.R8)]
+        public double w;
+
+        /// <summary>
+        /// Get or set x,y,z,w components (double) as 0,1,2,3 - other values throw an IndexOutOfRange exception.
+        /// </summary>
+        /// <param name="index">Set a component of the quaternion by int index.</param>
+        /// <returns>
+        /// A <see cref="System.Double"/> in the quaternion.
+        /// </returns>
+        public double this[int index]
+        {
+            get
+            {
+                switch (index)
+                {
+                    case 0:
+                        return x;
+                    case 1:
+                        return y;
+                    case 2:
+                        return z;
+                    case 3:
+                        return w;
+                    default:
+                        throw new System.IndexOutOfRangeException();
+                }
+            }
+          
+            set
+            {
+                switch (index)
+                {
+                    case 0:
+                        x = value;
+                        return;
+                    case 1:
+                        y = value;
+                        return;
+                    case 2:
+                        z = value;
+                        return;
+                    case 3:
+                        w = value;
+                        return;
+                    default:
+                        throw new System.IndexOutOfRangeException();
+                }
+            }
+        }
+    }
+  
+    /// <summary>
+    /// DEPRECATED: A <c>TangoXYZij</c> object contains information returned from the depth sensor.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public class TangoXYZij
@@ -99,29 +251,29 @@ namespace Tango
         /// With the unit in landscape orientation, screen facing the user: +Z points in the direction of the
         /// camera's optical axis, and is measured perpendicular to the plane of the camera. +X points toward the
         /// user's right, and +Y points toward the bottom of the screen. The origin is the focal centre of the color
-        /// camera. The output is in units of metres.
+        /// camera. The output is in units of meters.
         /// </summary>
         [MarshalAs(UnmanagedType.LPArray)]
         public IntPtr xyz;
 
         /// <summary>
-        /// The dimensions of the ij index buffer.
+        /// The dimensions of the <c>ij</c> index buffer.
         /// </summary>
         [MarshalAs(UnmanagedType.I4)]
         public int ij_rows;
 
         /// <summary>
-        /// The dimensions of the ij index buffer.
+        /// The dimensions of the <c>ij</c> index buffer.
         /// </summary>
         [MarshalAs(UnmanagedType.I4)]
         public int ij_cols;
 
         /// <summary>
-        /// A 2D buffer, of size ij_rows x ij_cols in raster ordering that contains the index of a point in the xyz
-        /// array that was generated at this "ij" location.
+        /// A 2D buffer, of size <c>ij_rows</c> x <c>ij_cols</c> in raster ordering that contains the index of 
+        /// a point in the <c>xyz</c> array that was generated at this <c>ij</c> location.
         /// 
         /// A value of -1 denotes there was no corresponding point generated at that position. This buffer can be used
-        /// to find neighbouring points in the point cloud.
+        /// to find neighboring points in the point cloud.
         /// 
         /// For more information, see our developer overview on depth perception .
         /// </summary>
@@ -157,13 +309,13 @@ namespace Tango
     /// - "TangoServiceException:X" - The service has encountered an exception, and
     /// a text description is given in X.
     /// - "FisheyeOverExposed:X" - the fisheye image is over exposed with average
-    /// pixel value X px.
+    /// pixel value X.
     /// - "FisheyeUnderExposed:X" - the fisheye image is under exposed with average
-    /// pixel value X px.
+    /// pixel value X.
     /// - "ColorOverExposed:X" - the color image is over exposed with average pixel
-    /// value X px.
+    /// value X.
     /// - "ColorUnderExposed:X" - the color image is under exposed with average
-    /// pixel value X px.
+    /// pixel value X.
     /// - "TooFewFeaturesTracked:X" - too few features were tracked in the fisheye
     /// image.  The number of features tracked is X.
     /// - "Unknown".
@@ -257,7 +409,7 @@ namespace Tango
     /// y = X / Z * fy * rd / ru + cy
     /// </code>
     ///
-    /// The normalized radial distance ru is given by:
+    /// The normalized radial distance <c>ru</c> is given by:
     ///
     /// <code>
     /// ru = sqrt((X^2 + Y^2) / (Z^2))
@@ -265,14 +417,14 @@ namespace Tango
     ///
     /// The distorted radial distance rd depends on the distortion model used.
     ///
-    /// For <code>TangoCalibrationType.TANGO_CALIBRATION_POLYNOMIAL_3_PARAMETERS</code>, rd is a
+    /// For <code>TangoCalibrationType.TANGO_CALIBRATION_POLYNOMIAL_3_PARAMETERS</code>, <c>rd</c> is a
     /// polynomial that depends on the 3 distortion coefficients k1, k2 and k3:
     ///
     /// <code>
     /// rd = ru + k1 * ru^3 + k2 * ru^5 + k3 * ru^7
     /// </code>
     ///
-    /// For <code>TangoCalibrationType.TANGO_CALIBRATION_EQUIDISTANT</code>, rd depends on the single
+    /// For <code>TangoCalibrationType.TANGO_CALIBRATION_EQUIDISTANT</code>, <c>rd</c> depends on the single
     /// distortion coefficient w:
     ///
     /// <code>
@@ -403,15 +555,13 @@ namespace Tango
         ///   w = cos(RotationAngle / 2)
         /// </code>
         /// </summary>
-        [MarshalAsAttribute(UnmanagedType.ByValArray, SizeConst = 4, ArraySubType = UnmanagedType.R8)]
-        public double[] orientation;
+        public TangoOrientation orientation;
 
         /// <summary>
         /// Translation, ordered x, y, z, of the pose of the target frame
         /// with reference to the base frame.
         /// </summary>
-        [MarshalAsAttribute(UnmanagedType.ByValArray, SizeConst = 3, ArraySubType = UnmanagedType.R8)]
-        public double[] translation;
+        public TangoTranslation translation;
 
         /// <summary>
         /// The status of the pose, according to the pose lifecycle.
@@ -447,8 +597,8 @@ namespace Tango
         {
             version = 0;
             timestamp = 0.0;
-            orientation = new double[4];
-            translation = new double[3];
+            orientation = new TangoOrientation();
+            translation = new TangoTranslation();
             status_code = TangoEnums.TangoPoseStatusType.TANGO_POSE_UNKNOWN;
             framePair.baseFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_START_OF_SERVICE;
             framePair.targetFrame = TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE;
@@ -549,7 +699,49 @@ namespace Tango
     }
 
     /// <summary>
-    /// Like TangoXYZij, but more Unity friendly.
+    /// Point cloud from the depth sensor.  The <c>m_points</c> array is not fully filled out, there are only
+    /// <c>m_numPoints</c> points stored there.
+    /// </summary>
+    public class TangoPointCloudData
+    {
+        /// <summary>
+        /// Time of capture of the point cloud (in seconds).
+        /// </summary>
+        public double m_timestamp;
+
+        /// <summary>
+        /// The number of valid points in <c>m_points</c>.
+        /// </summary>
+        public int m_numPoints;
+
+        /// <summary>
+        /// An array of XYZ,C values.  If you want individual Vector3 objects, use the indexer.
+        /// 
+        /// XYZ is a coordinate in meters.  C is a confidence value in the range [0, 1],
+        /// where 1 corresponds to full confidence.
+        /// </summary>
+        public float[] m_points;
+
+        /// <summary>
+        /// Gets the point at the specified index as a Vector3.
+        /// </summary>
+        /// <param name="index">Index of the point.</param>
+        /// <returns>Vector3 at the specified index.</returns>
+        public Vector3 this[int index]
+        {
+            get
+            {
+                Vector3 val;
+                val.x = m_points[(index * 4) + 0];
+                val.y = m_points[(index * 4) + 1];
+                val.z = m_points[(index * 4) + 2];
+                return val;
+            }
+        }
+    }
+
+    /// <summary>
+    /// DEPRECATED: Like <c>TangoXYZij</c>, but more Unity friendly.
     /// </summary>
     public class TangoUnityDepth
     {
@@ -558,14 +750,14 @@ namespace Tango
         /// supported by Unity. This array is multiplied by 3 to account for the
         /// x/y/z components.
         /// </summary>
-        public static readonly int MAX_POINTS_ARRAY_SIZE = Common.UNITY_MAX_SUPPORTED_VERTS_PER_MESH * 3;
+        public static readonly int MAX_POINTS_ARRAY_SIZE = Common.MAX_NUM_POINTS * 3;
         
         /// <summary>
         /// Max IJ array size is currently defined by the largest single mesh
         /// supported by Unity. This number is multiplied by 2 to account for the
         /// i/j components.
         /// </summary>
-        public static readonly int MAX_IJ_ARRAY_SIZE = Common.UNITY_MAX_SUPPORTED_VERTS_PER_MESH * 2;
+        public static readonly int MAX_IJ_ARRAY_SIZE = Common.MAX_NUM_POINTS * 2;
 
         /// <summary>
         /// 
@@ -591,22 +783,22 @@ namespace Tango
         public double m_timestamp;
 
         /// <summary>
-        /// The dimensions of the ij index buffer.
+        /// The dimensions of the <c>ij</c> index buffer.
         /// </summary>
         public int m_ijRows;
 
         /// <summary>
-        /// The dimensions of the ij index buffer.
+        /// The dimensions of the <c>ij</c> index buffer.
         /// </summary>
         public int m_ijColumns;
 
         /// <summary>
-        /// A 2D buffer, of size ij_rows x ij_cols in raster ordering that contains
-        /// the index of a point in the xyz array that was generated at this "ij"
+        /// A 2D buffer, of size <c>ij_rows</c> x <c>ij_cols</c> in raster ordering that contains
+        /// the index of a point in the <c>xyz</c> array that was generated at this <c>ij</c>
         /// location.
         /// 
         /// A value of -1 denotes there was no corresponding point generated at that position. This buffer can be used
-        /// to find neighbouring points in the point cloud.
+        /// to find neighboring points in the point cloud.
         /// 
         /// For more information, see our
         /// <a href ="/project-tango/overview/depth-perception#xyzij">developer
@@ -624,6 +816,32 @@ namespace Tango
             m_version = -1;
             m_timestamp = 0.0;
             m_pointCount = m_ijRows = m_ijColumns = 0;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Tango.TangoUnityDepth"/> class from a
+        /// <see cref="PointCloud"/> instance.
+        /// </summary>
+        /// <param name="pointCloud">Point cloud.</param>
+        public TangoUnityDepth(TangoPointCloudData pointCloud)
+        {
+            m_points = new float[MAX_POINTS_ARRAY_SIZE];
+            m_ij = new int[MAX_IJ_ARRAY_SIZE];
+
+            m_timestamp = pointCloud.m_timestamp;
+            m_pointCount = pointCloud.m_numPoints;
+            for (int it = 0; it < pointCloud.m_points.Length / 4; ++it)
+            {
+                m_points[(it * 3) + 0] = pointCloud.m_points[(it * 4) + 0];
+                m_points[(it * 3) + 1] = pointCloud.m_points[(it * 4) + 1];
+                m_points[(it * 3) + 2] = pointCloud.m_points[(it * 4) + 2];
+            }
+
+            m_ijRows = m_ijColumns = 0;
+            for (int it = 0; it < m_ij.Length; ++it)
+            {
+                m_ij[it] = -1;
+            }
         }
     }
 }

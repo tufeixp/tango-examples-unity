@@ -33,43 +33,99 @@ namespace Tango
     /// <summary>
     /// Marshals Tango pose data between the C callbacks in one thread and the main Unity thread.
     /// </summary>
-    public class PoseListener
+    internal static class PoseListener
     {
+        /// <summary>
+        /// The lock object used as a mutex.
+        /// </summary>
+        private static System.Object m_lockObject = new System.Object();
+
         /// <summary>
         /// Called when a new Tango pose is available.
         /// </summary>
-        private Tango.PoseProvider.TangoService_onPoseAvailable m_poseAvailableCallback;
+        private static PoseProvider.APIOnPoseAvailable m_poseAvailableCallback;
 
-        private TangoPoseData m_motionTrackingData = new TangoPoseData();
-        private TangoPoseData m_areaLearningData = new TangoPoseData();
-        private TangoPoseData m_relocalizationData = new TangoPoseData();
-        private OnTangoPoseAvailableEventHandler m_onTangoPoseAvailable;
+        private static TangoPoseData m_motionTrackingData = new TangoPoseData();
+        private static TangoPoseData m_areaLearningData = new TangoPoseData();
+        private static TangoPoseData m_relocalizationData = new TangoPoseData();
+        private static TangoPoseData m_cloudPoseData = new TangoPoseData();
+        private static OnTangoPoseAvailableEventHandler m_onTangoPoseAvailable;
 
-        private bool m_isMotionTrackingPoseAvailable = false;
-        private bool m_isAreaLearningPoseAvailable = false;
-        private bool m_isRelocalizaitonPoseAvailable = false;
-        private object m_lockObject = new object();
+        private static bool m_isMotionTrackingPoseAvailable = false;
+        private static bool m_isAreaLearningPoseAvailable = false;
+        private static bool m_isRelocalizationPoseAvailable = false;
+        private static bool m_isCloudPoseAvailable = false;
 
 #if UNITY_EDITOR
-        private double m_mostRecentEmulatedRelocalizationTimestamp = -1.0;
+        private static double m_mostRecentEmulatedRelocalizationTimestamp;
 #endif
 
         /// <summary>
-        /// Gets or sets a value indicating whether this <see cref="PoseListener"/> is using auto reset.
+        /// Initializes the <see cref="Tango.PoseListener"/> class.
         /// </summary>
-        /// <value><c>true</c> if auto reset; otherwise, <c>false</c>.</value>
-        internal bool AutoReset
+        static PoseListener()
         {
-            get;
-            set;
+            Reset();
+        }
+
+        /// <summary>
+        /// Stop getting Tango pose callbacks.
+        /// </summary>
+        internal static void Reset()
+        {
+            // Avoid calling into tango_client_api before the correct library is loaded.
+            if (m_poseAvailableCallback != null)
+            {
+                PoseProvider.ClearCallback();
+            }
+
+            m_poseAvailableCallback = null;
+            m_motionTrackingData = new TangoPoseData();
+            m_areaLearningData = new TangoPoseData();
+            m_relocalizationData = new TangoPoseData();
+            m_cloudPoseData = new TangoPoseData();
+            m_onTangoPoseAvailable = null;
+            m_isMotionTrackingPoseAvailable = false;
+            m_isAreaLearningPoseAvailable = false;
+            m_isRelocalizationPoseAvailable = false;
+            m_isCloudPoseAvailable = false;
+
+#if UNITY_EDITOR
+            m_mostRecentEmulatedRelocalizationTimestamp = -1;
+#endif
+        }
+
+        /// <summary>
+        /// Register to get Tango pose callbacks for specific reference frames.
+        /// 
+        /// NOTE: Tango pose callbacks happen on a different thread than the main
+        /// Unity thread.
+        /// </summary>
+        /// <param name="framePairs">The reference frames to get callbacks for.</param>
+        internal static void SetCallback(TangoCoordinateFramePair[] framePairs)
+        {
+            if (m_poseAvailableCallback != null)
+            {
+                Debug.Log("PoseListener.SetCallback() called when callback is already set.");
+                return;
+            }
+            
+            Debug.Log("PoseListener.SetCallback()");
+            m_poseAvailableCallback = new PoseProvider.APIOnPoseAvailable(_OnPoseAvailable);
+            PoseProvider.SetCallback(framePairs, m_poseAvailableCallback);
         }
 
         /// <summary>
         /// Raise a Tango pose event if there is new data.
         /// </summary>
         /// <param name="emulateAreaDescriptions">If set, Area description poses are emulated.</param>
-        internal void SendPoseIfAvailable(bool emulateAreaDescriptions)
+        internal static void SendIfAvailable(bool emulateAreaDescriptions)
         {
+            if (m_poseAvailableCallback == null)
+            {
+                return;
+            }
+
 #if UNITY_EDITOR
             lock (m_lockObject)
             {
@@ -102,8 +158,8 @@ namespace Tango
                             if (m_relocalizationData.status_code == TangoEnums.TangoPoseStatusType.TANGO_POSE_VALID
                                 && m_relocalizationData.timestamp != m_mostRecentEmulatedRelocalizationTimestamp)
                             {
-                                m_mostRecentEmulatedRelocalizationTimestamp = m_mostRecentEmulatedRelocalizationTimestamp;
-                                m_isRelocalizaitonPoseAvailable = true;
+                                m_mostRecentEmulatedRelocalizationTimestamp = m_relocalizationData.timestamp;
+                                m_isRelocalizationPoseAvailable = true;
                             }
                         }
                     }
@@ -129,33 +185,26 @@ namespace Tango
                         m_isAreaLearningPoseAvailable = false;
                     }
 
-                    if (m_isRelocalizaitonPoseAvailable)
+                    if (m_isRelocalizationPoseAvailable)
                     {
                         m_onTangoPoseAvailable(m_relocalizationData);
-                        m_isRelocalizaitonPoseAvailable = false;
+                        m_isRelocalizationPoseAvailable = false;
+                    }
+
+                    if (m_isCloudPoseAvailable)
+                    {
+                        m_onTangoPoseAvailable(m_cloudPoseData);
+                        m_isCloudPoseAvailable = false;
                     }
                 }
             }
         }
 
         /// <summary>
-        /// Register to get Tango pose callbacks for specific reference frames.
-        /// 
-        /// NOTE: Tango pose callbacks happen on a different thread than the main
-        /// Unity thread.
-        /// </summary>
-        /// <param name="framePairs">The reference frames to get callbacks for.</param>
-        internal void SetCallback(TangoCoordinateFramePair[] framePairs)
-        {
-            m_poseAvailableCallback = new Tango.PoseProvider.TangoService_onPoseAvailable(_OnPoseAvailable);
-            Tango.PoseProvider.SetCallback(framePairs, m_poseAvailableCallback);
-        }
-        
-        /// <summary>
         /// Register a Unity main thread handler for the Tango pose event.
         /// </summary>
         /// <param name="handler">Event handler to register.</param>
-        internal void RegisterTangoPoseAvailable(OnTangoPoseAvailableEventHandler handler)
+        internal static void RegisterTangoPoseAvailable(OnTangoPoseAvailableEventHandler handler)
         {
             if (handler != null)
             {
@@ -167,7 +216,7 @@ namespace Tango
         /// Unregister a Unity main thread handler for the Tango depth event.
         /// </summary>
         /// <param name="handler">Event handler to unregister.</param>
-        internal void UnregisterTangoPoseAvailable(OnTangoPoseAvailableEventHandler handler)
+        internal static void UnregisterTangoPoseAvailable(OnTangoPoseAvailableEventHandler handler)
         {
             if (handler != null)
             {
@@ -180,7 +229,8 @@ namespace Tango
         /// </summary>
         /// <param name="callbackContext">Callback context.</param>
         /// <param name="pose">The pose data returned from Tango.</param>
-        private void _OnPoseAvailable(IntPtr callbackContext, TangoPoseData pose)
+        [AOT.MonoPInvokeCallback(typeof(PoseProvider.APIOnPoseAvailable))]
+        private static void _OnPoseAvailable(IntPtr callbackContext, TangoPoseData pose)
         {
             if (pose.framePair.baseFrame == TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_START_OF_SERVICE &&
                 pose.framePair.targetFrame == TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE)
@@ -209,7 +259,17 @@ namespace Tango
                 lock (m_lockObject)
                 {
                     m_relocalizationData.DeepCopy(pose);
-                    m_isRelocalizaitonPoseAvailable = true;
+                    m_isRelocalizationPoseAvailable = true;
+                }
+            }
+            else if (pose.framePair.baseFrame == TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_GLOBAL_WGS84 &&
+                     pose.framePair.targetFrame == TangoEnums.TangoCoordinateFrameType.TANGO_COORDINATE_FRAME_DEVICE)
+            {
+                // Cloud ADF localized
+                lock (m_lockObject)
+                {
+                    m_cloudPoseData.DeepCopy(pose);
+                    m_isCloudPoseAvailable = true;
                 }
             }
         }
